@@ -92,6 +92,30 @@ def resume(session_id: str = typer.Argument(..., help="ID de la sesión.")) -> N
 
 
 @app.command()
+def serve(
+    host: str | None = typer.Option(None, help="Host de escucha (por defecto, config)."),
+    port: int | None = typer.Option(None, help="Puerto (por defecto, config)."),
+) -> None:
+    """Arranca el gateway respetando la config; avisa si se expone a la LAN sin token."""
+    import uvicorn
+
+    from .gateway.app import app as gateway_app
+
+    s = get_settings()
+    h = host or s.host
+    p = port or s.port
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if h not in loopback and not s.api_token:
+        typer.secho(
+            f"AVISO: gateway expuesto en {h} SIN token (HEFISTY_API_TOKEN vacío). "
+            "Cualquiera en la red podría usarlo. Define un token o usa 127.0.0.1.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+    uvicorn.run(gateway_app, host=h, port=p)
+
+
+@app.command()
 def status() -> None:
     """Muestra el estado de los servicios y los modelos cargados."""
     base, headers = _api()

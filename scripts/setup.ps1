@@ -44,5 +44,5 @@ if (-not $SkipDocker) {
 
 Write-Host ""
 Write-Host "Listo. Copia .env.example a .env y arranca el gateway:" -ForegroundColor Green
-Write-Host "  uvicorn hefisty.gateway.app:app --host 127.0.0.1 --port 8080" -ForegroundColor Green
+Write-Host "  hefisty serve    # gateway con la config" -ForegroundColor Green
 Write-Host "  hefisty status   # verifica que todo este verde" -ForegroundColor Green

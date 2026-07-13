@@ -14,8 +14,9 @@ Cómo levantar y trabajar el MVP en la máquina de desarrollo.
 pwsh -File scripts/setup.ps1        # verifica Ollama, baja modelos, levanta Redis+Qdrant
 copy .env.example .env              # ajusta si hace falta (token, rutas)
 uv sync --all-extras                # entorno Python
-uv run uvicorn hefisty.gateway.app:app --host 127.0.0.1 --port 8080
+uv run hefisty serve                # gateway con la config (bind a HEFISTY_HOST; avisa si expone LAN sin token)
 ```
+Alternativa cruda: `uv run uvicorn hefisty.gateway.app:app --host 127.0.0.1 --port 8080`.
 Front:
 ```powershell
 cd web; pnpm install; pnpm build    # genera web/dist que el gateway sirve en /
@@ -44,8 +45,9 @@ uv run hefisty resume <id>
 
 ## Decisiones técnicas y desviaciones del diseño
 1. **Ollama directo (httpx) en vez de LiteLLM en Fase 2.** Menos setup y control total del
-   streaming/keep_alive. LiteLLM queda declarado en `pyproject`; se puede intercalar más
-   tarde sin tocar los agentes (hablan HTTP a un endpoint OpenAI-compat).
+   streaming/keep_alive. LiteLLM queda como extra opcional (`pip install hefisty[serving]`),
+   no en el runtime por defecto; se puede intercalar más tarde sin tocar los agentes
+   (hablan HTTP a un endpoint OpenAI-compat).
 2. **Herramientas del Coder listas pero sin bucle agéntico autónomo.** `leer/escribir/listar`
    están implementadas, testeadas y registradas en `role.yaml`; el bucle buscar→leer→editar
    se integra en Fase 3 (coherente con el ROADMAP: navegación de código = Fase 3). En Fase 2
