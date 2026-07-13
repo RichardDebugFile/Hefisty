@@ -28,7 +28,7 @@ from ..orchestrator.core import Orchestrator
 from ..orchestrator.router import Router
 from ..orchestrator.sessions import SessionStore
 from ..protections import detect_injection
-from ..roles import load_role
+from ..roles import list_roles, load_role
 from ..semantic_cache import SemanticCache
 from .auth import make_auth_dep
 from .schemas import ChatRequest, FeedbackRequest, RenameRequest
@@ -245,6 +245,35 @@ def create_app(
             await cache.delete_key(body.cache_key)
             invalidated = True
         return {"id": fid, "invalidated_cache": invalidated}
+
+    @app.get("/v1/models", dependencies=[Depends(auth)])
+    async def models_loaded():  # noqa: ANN202
+        running = await ollama.running()
+        return {
+            "models": [
+                {
+                    "name": m.get("name", ""),
+                    "vram_bytes": m.get("size_vram", 0),
+                    "vram": f"{m.get('size_vram', 0) / 1e9:.1f} GB",
+                }
+                for m in running
+            ]
+        }
+
+    @app.get("/v1/roles", dependencies=[Depends(auth)])
+    async def roles_installed():  # noqa: ANN202
+        return {
+            "roles": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "model": r.model,
+                    "collection": r.collection,
+                    "tools": r.tools,
+                }
+                for r in list_roles()
+            ]
+        }
 
     @app.get("/health")
     async def health():  # noqa: ANN202

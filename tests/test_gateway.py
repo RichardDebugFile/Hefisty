@@ -25,6 +25,9 @@ class FakeOllama:
     async def loaded_models(self):
         return ["qwen3:1.7b"]
 
+    async def running(self):
+        return [{"name": "qwen3:1.7b", "size_vram": 1_900_000_000}]
+
 
 class FakeCache:
     def __init__(self):
@@ -167,6 +170,23 @@ def test_feedback_up_does_not_invalidate(tmp_path):
     assert r.status_code == 200
     assert r.json()["invalidated_cache"] is False
     assert cache.deleted == []
+
+
+def test_models_panel_endpoint(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.get("/v1/models")
+    assert r.status_code == 200
+    models = r.json()["models"]
+    assert models[0]["name"] == "qwen3:1.7b"
+    assert "GB" in models[0]["vram"]
+
+
+def test_roles_panel_endpoint(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.get("/v1/roles")
+    assert r.status_code == 200
+    names = [x["name"] for x in r.json()["roles"]]
+    assert {"coder", "revisor", "docs"} <= set(names)
 
 
 def test_unknown_session_id_returns_404(tmp_path):
