@@ -71,3 +71,20 @@ async def test_agentic_accepts_string_arguments(tmp_path):
     agent = AgenticCoder(ScriptedOllama(script), load_role("coder"), tmp_path, Settings())
     res = await agent.run("lee x.txt", None)
     assert "hola" in res["answer"]
+
+
+async def test_agentic_parses_text_tool_call(tmp_path):
+    # Modelos/Ollama que emiten la tool call como texto (```json ...```) en vez de tool_calls.
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    script = [
+        {
+            "content": '```json\n{"name": "glob", "arguments": {"patron": "*.py"}}\n```',
+            "tool_calls": [],
+        },
+        {"content": "Encontré app.py.", "tool_calls": []},
+    ]
+    agent = AgenticCoder(ScriptedOllama(script), load_role("coder"), tmp_path, Settings())
+    events: list[str] = []
+    res = await agent.run("lista los .py", events.append)
+    assert res["steps"] == 1  # el glob se ejecutó vía fallback de texto
+    assert "app.py" in events[0]

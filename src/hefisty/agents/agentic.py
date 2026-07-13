@@ -8,6 +8,7 @@ edición registra el archivo tocado. Bucle acotado a `max_rounds`.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,24 @@ _TOOL_GUIDANCE = (
     "resumen breve de lo que hiciste."
 )
 
+_TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+
+
+def _extract_text_toolcall(content: str) -> dict | None:
+    """Fallback: algunos modelos (o versiones viejas de Ollama) emiten la llamada como
+    JSON en el texto en vez de en `tool_calls`. Detecta {"name":…, "arguments":…}."""
+    text = content.strip()
+    m = _TEXT_TOOLCALL_RE.search(text)
+    if m:
+        text = m.group(1)
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
+        return {"function": {"name": obj["name"], "arguments": obj["arguments"]}}
+    return None
+
 
 class AgenticCoder:
     def __init__(
@@ -147,16 +166,19 @@ class AgenticCoder:
             msg = await self._ollama.chat_tools(
                 self._role.model, convo, TOOLS_SPEC, keep_alive=self._s.keep_alive
             )
+            content = msg.get("content", "")
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
+                fallback = _extract_text_toolcall(content)
+                if fallback is not None:
+                    tool_calls = [fallback]
+            if not tool_calls:
                 return {
-                    "answer": msg.get("content", ""),
+                    "answer": content,
                     "touched": sorted(self._touched),
                     "steps": steps,
                 }
-            convo.append(
-                {"role": "assistant", "content": msg.get("content", ""), "tool_calls": tool_calls}
-            )
+            convo.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
