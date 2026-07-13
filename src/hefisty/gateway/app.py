@@ -7,6 +7,7 @@ sesiones y sirve el front compilado (`web/dist`) en `/`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -69,30 +70,50 @@ def create_app(
     @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
     async def chat(req: ChatRequest):  # noqa: ANN202 - respuesta dinámica (JSON o SSE)
         user_text = _sanitize(req)
-        session = sessions.get(req.session_id) if req.session_id else None
-        if session is None:
-            session = sessions.create()
+        if req.session_id:
+            session = await asyncio.to_thread(sessions.get, req.session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="Sesión no encontrada")
+            created = False
+        else:
+            session = await asyncio.to_thread(sessions.create)
+            created = True
 
         if req.stream:
 
             async def event_gen() -> AsyncIterator[str]:
-                async for ev in orchestrator.stream_turn(session, user_text):
-                    if ev["type"] == "meta":
-                        yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-                    else:
-                        chunk = {"choices": [{"delta": {"content": ev["text"]}}]}
-                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
+                errored = False
+                try:
+                    async for ev in orchestrator.stream_turn(session, user_text):
+                        if ev["type"] == "meta":
+                            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                        else:
+                            chunk = {"choices": [{"delta": {"content": ev["text"]}}]}
+                            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                except Exception as exc:
+                    errored = True
+                    err = {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+                finally:
+                    if errored and created:
+                        # limpia la sesión huérfana creada en esta petición
+                        await asyncio.to_thread(sessions.delete, session.id)
+                    yield "data: [DONE]\n\n"
 
             return StreamingResponse(event_gen(), media_type="text/event-stream")
 
         meta: dict | None = None
         parts: list[str] = []
-        async for ev in orchestrator.stream_turn(session, user_text):
-            if ev["type"] == "meta":
-                meta = ev
-            else:
-                parts.append(ev["text"])
+        try:
+            async for ev in orchestrator.stream_turn(session, user_text):
+                if ev["type"] == "meta":
+                    meta = ev
+                else:
+                    parts.append(ev["text"])
+        except Exception as exc:
+            if created:
+                await asyncio.to_thread(sessions.delete, session.id)
+            raise HTTPException(status_code=503, detail=f"Error del modelo: {exc}") from exc
         content = "".join(parts)
         return JSONResponse(
             {
@@ -116,6 +137,7 @@ def create_app(
 
     @app.get("/v1/sessions", dependencies=[Depends(auth)])
     async def list_sessions():  # noqa: ANN202
+        items = await asyncio.to_thread(sessions.list)
         return {
             "sessions": [
                 {
@@ -124,13 +146,13 @@ def create_app(
                     "updated_at": s.updated_at,
                     "active_agent": s.active_agent,
                 }
-                for s in sessions.list()
+                for s in items
             ]
         }
 
     @app.post("/v1/sessions/{session_id}/resume", dependencies=[Depends(auth)])
     async def resume(session_id: str):  # noqa: ANN202
-        s = sessions.get(session_id)
+        s = await asyncio.to_thread(sessions.get, session_id)
         if s is None:
             raise HTTPException(status_code=404, detail="Sesión no encontrada")
         return {
@@ -142,9 +164,9 @@ def create_app(
 
     @app.patch("/v1/sessions/{session_id}", dependencies=[Depends(auth)])
     async def rename(session_id: str, body: RenameRequest):  # noqa: ANN202
-        if sessions.get(session_id) is None:
+        if await asyncio.to_thread(sessions.get, session_id) is None:
             raise HTTPException(status_code=404, detail="Sesión no encontrada")
-        sessions.rename(session_id, body.title)
+        await asyncio.to_thread(sessions.rename, session_id, body.title)
         return {"id": session_id, "title": body.title}
 
     @app.get("/health")

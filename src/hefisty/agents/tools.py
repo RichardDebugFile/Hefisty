@@ -7,7 +7,7 @@ queda para la Fase 3.
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 class ToolError(Exception):
@@ -15,6 +15,10 @@ class ToolError(Exception):
 
 
 def _resolve(workspace: Path, rel: str) -> Path:
+    # Rechaza de entrada rutas absolutas o con unidad (C:..., \\server, /etc): el Coder
+    # solo direcciona con rutas relativas dentro del workspace.
+    if Path(rel).is_absolute() or PureWindowsPath(rel).drive or PureWindowsPath(rel).is_absolute():
+        raise ToolError(f"Ruta no relativa no permitida: {rel}")
     workspace = Path(workspace).resolve()
     target = (workspace / rel).resolve()
     if target != workspace and workspace not in target.parents:

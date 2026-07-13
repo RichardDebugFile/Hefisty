@@ -10,7 +10,6 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
-    "litellm>=1.50",
     "qdrant-client>=1.12",
     "redis>=5.0",
     "pydantic>=2.9",
@@ -20,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.7"]
+# Backend de serving alternativo (router LiteLLM). Aún no cableado: en Fase 2 los
+# agentes hablan directo con la API de Ollama. Ver docs/ARCHITECTURE.md.
+serving = ["litellm>=1.50"]
 
 [project.scripts]
 hefisty = "hefisty.cli:app"

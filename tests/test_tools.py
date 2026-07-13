@@ -32,3 +32,29 @@ def test_escape_is_blocked(tmp_path):
 def test_read_missing_file(tmp_path):
     with pytest.raises(ToolError):
         leer_archivo(tmp_path, "nope.txt")
+
+
+def test_absolute_path_blocked(tmp_path):
+    outside = tmp_path.parent / "outside.txt"
+    with pytest.raises(ToolError):
+        leer_archivo(tmp_path, str(outside))
+    with pytest.raises(ToolError):
+        escribir_archivo(tmp_path, "/etc/passwd", "x")
+
+
+def test_drive_relative_blocked(tmp_path):
+    with pytest.raises(ToolError):
+        leer_archivo(tmp_path, "C:evil.txt")
+
+
+def test_symlink_escape_blocked(tmp_path):
+    outside = tmp_path.parent / "outside_dir"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("s", encoding="utf-8")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks no permitidos en este entorno")
+    with pytest.raises(ToolError):
+        leer_archivo(tmp_path, "link/secret.txt")
