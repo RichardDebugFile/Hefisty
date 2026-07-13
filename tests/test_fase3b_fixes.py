@@ -32,7 +32,7 @@ async def test_semantic_cache_delete_targets_point():
 def test_grep_skips_escaping_symlink(tmp_path):
     outside = tmp_path.parent / "outside_grep"
     outside.mkdir(exist_ok=True)
-    (outside / "secret.txt").write_text("PASSWORD=zzz", encoding="utf-8")
+    (outside / "secret.txt").write_text("MARCA_FUERA=zzz", encoding="utf-8")
     (tmp_path / "in.txt").write_text("contenido normal", encoding="utf-8")
     link = tmp_path / "leak.txt"
     try:
@@ -40,7 +40,7 @@ def test_grep_skips_escaping_symlink(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks no permitidos en este entorno")
     # grep no debe leer el archivo enlazado que apunta fuera del workspace
-    assert tools.grep(tmp_path, "PASSWORD") == []
+    assert tools.grep(tmp_path, "MARCA_FUERA") == []
 
 
 def test_glob_skips_escaping_symlink(tmp_path):
