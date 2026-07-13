@@ -1,0 +1,98 @@
+"""Configuración central de Hefisty.
+
+Carga un `.env` local (gitignoreado) sin dependencias extra y expone `Settings`.
+Ningún secreto se hardcodea: todo viene del entorno / `.env`.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import BaseModel
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_dotenv(path: Path) -> None:
+    """Parser mínimo de `.env` (KEY=VALUE por línea).
+
+    Ignora comentarios y líneas vacías y NO sobreescribe variables ya presentes
+    en el entorno (el entorno real tiene prioridad).
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv(REPO_ROOT / ".env")
+
+
+class Settings(BaseModel):
+    """Configuración inmutable del proceso, construida desde el entorno."""
+
+    # Red del gateway.
+    host: str = "127.0.0.1"
+    port: int = 8080
+    api_token: str = ""
+
+    # Servicios.
+    ollama_url: str = "http://127.0.0.1:11434"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    qdrant_url: str = "http://127.0.0.1:6333"
+
+    # Modelos.
+    model_frontal: str = "qwen3:1.7b"
+    model_coder: str = "qwen2.5-coder:14b"
+    model_embed: str = "nomic-embed-text"
+    keep_alive: str = "10m"
+
+    # Directorios locales.
+    workspace_dir: Path = REPO_ROOT / "workspace"
+    data_dir: Path = REPO_ROOT / "data"
+
+    # Cache L1 (segundos) y límites.
+    cache_ttl_chat: int = 3600
+    cache_ttl_code: int = 600
+    max_input_chars: int = 32000
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "sessions.db"
+
+    @property
+    def web_dist(self) -> Path:
+        return REPO_ROOT / "web" / "dist"
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        e = os.environ.get
+        return cls(
+            host=e("HEFISTY_HOST", "127.0.0.1"),
+            port=int(e("HEFISTY_PORT", "8080")),
+            api_token=e("HEFISTY_API_TOKEN", ""),
+            ollama_url=e("HEFISTY_OLLAMA_URL", "http://127.0.0.1:11434"),
+            redis_url=e("HEFISTY_REDIS_URL", "redis://127.0.0.1:6379/0"),
+            qdrant_url=e("HEFISTY_QDRANT_URL", "http://127.0.0.1:6333"),
+            model_frontal=e("HEFISTY_MODEL_FRONTAL", "qwen3:1.7b"),
+            model_coder=e("HEFISTY_MODEL_CODER", "qwen2.5-coder:14b"),
+            model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
+            keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
+            workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
+            data_dir=Path(e("HEFISTY_DATA_DIR", str(REPO_ROOT / "data"))),
+            cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
+            cache_ttl_code=int(e("HEFISTY_CACHE_TTL_CODE", "600")),
+            max_input_chars=int(e("HEFISTY_MAX_INPUT_CHARS", "32000")),
+        )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Settings cacheadas para todo el proceso."""
+    return Settings.from_env()
