@@ -19,6 +19,7 @@ from ..config import Settings
 from ..knowledge.retrieval import Retriever
 from ..knowledge.store import Hit
 from ..ollama_client import Message, OllamaClient
+from ..protections import redact_credentials, sanitize_chunk
 from ..roles import load_identity
 from .router import Router
 from .sessions import Session, SessionStore
@@ -175,11 +176,17 @@ class Orchestrator:
             "sources": sources,
         }
         parts: list[str] = []
+        redacted = 0
         async for piece in gen:
+            piece, n = redact_credentials(piece)
+            redacted += n
             parts.append(piece)
             yield {"type": "content", "text": piece}
 
-        content = "".join(parts)
+        # Redacción final (por si una credencial cruzó el límite de un chunk de streaming).
+        content, n2 = redact_credentials("".join(parts))
+        if redacted + n2:
+            logger.warning("salida: %d credenciales redactadas", redacted + n2)
         await self._persist(session, user_text, content, agent)
         await self._cache.set(
             cache_msgs,
@@ -204,7 +211,12 @@ class Orchestrator:
 
     @staticmethod
     def _context_message(hits: list[Hit]) -> Message:
-        blocks = "\n\n".join(f"[{h.source}] ({h.section})\n{h.text}" for h in hits)
+        parts = []
+        for h in hits:
+            # Los chunks pueden venir de docs de terceros: degradar si traen injection.
+            safe, _degraded = sanitize_chunk(h.text)
+            parts.append(f"[{h.source}] ({h.section})\n{safe}")
+        blocks = "\n\n".join(parts)
         return {
             "role": "system",
             "content": (

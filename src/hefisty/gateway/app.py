@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -26,9 +27,12 @@ from ..ollama_client import OllamaClient
 from ..orchestrator.core import Orchestrator
 from ..orchestrator.router import Router
 from ..orchestrator.sessions import SessionStore
+from ..protections import detect_injection
 from ..roles import load_role
 from .auth import make_auth_dep
 from .schemas import ChatRequest, RenameRequest
+
+logger = logging.getLogger("hefisty.gateway")
 
 
 async def _qdrant_ok(url: str) -> bool:
@@ -79,6 +83,9 @@ def create_app(
         text = users[-1].content
         if len(text) > settings.max_input_chars:
             raise HTTPException(status_code=413, detail="Entrada demasiado grande")
+        flags = detect_injection(text)
+        if flags:
+            logger.warning("entrada con posible prompt injection (%d patrones)", len(flags))
         return text
 
     @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
