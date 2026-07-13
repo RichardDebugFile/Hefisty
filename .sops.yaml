@@ -1,0 +1,6 @@
+# Configuración de SOPS: qué se cifra y con qué clave.
+# Genera tu clave: `age-keygen -o ~/.config/sops/age/keys.txt`
+# y pega aquí la clave PÚBLICA (empieza con age1...).
+creation_rules:
+  - path_regex: .*\.enc\.(yaml|json|env)$
+    age: "REEMPLAZAR_CON_TU_CLAVE_PUBLICA_AGE"

@@ -1,0 +1,13 @@
+# Normaliza saltos de línea: LF en el repo y en working dir (proyecto cross-platform, contenedores Linux).
+* text=auto eol=lf
+
+# Binarios: nunca normalizar.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.gguf binary
+*.safetensors binary
+*.bin  binary

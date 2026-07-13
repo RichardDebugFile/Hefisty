@@ -1,0 +1,36 @@
+# Secretos — nunca al repo
+.env
+.env.*
+!.env.example
+!*.enc.*
+*.pem
+*.key
+age-key*.txt
+
+# Modelos y pesos — se descargan, no se versionan (gigas)
+*.gguf
+*.safetensors
+*.bin
+models/
+
+# Datos del usuario — privados por diseño
+data/
+sessions/
+qdrant_storage/
+datasets/corrections/
+logs/
+*.log
+
+# Entornos y caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+
+# SO / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
