@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from html.parser import HTMLParser
 from pathlib import Path
@@ -27,7 +28,26 @@ CODE_EXT = {
     ".sh",
 }
 TEXT_EXT = {".txt"}
-SUPPORTED = MARKDOWN_EXT | HTML_EXT | CODE_EXT | TEXT_EXT | {".pdf"}
+JSONL_EXT = {".jsonl"}
+SUPPORTED = MARKDOWN_EXT | HTML_EXT | CODE_EXT | TEXT_EXT | JSONL_EXT | {".pdf"}
+
+
+def load_jsonl_pairs(path: Path) -> list[tuple[str, str]]:
+    """Pares Q&A `{"u":pregunta,"a":respuesta}` (una línea = un par). Devuelve (u, a)."""
+    pairs: list[tuple[str, str]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        u = obj.get("u") or obj.get("pregunta") or obj.get("q") or ""
+        a = obj.get("a") or obj.get("respuesta") or ""
+        if u:
+            pairs.append((u, a))
+    return pairs
 
 
 class _HTMLText(HTMLParser):

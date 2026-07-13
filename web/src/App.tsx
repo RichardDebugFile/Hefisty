@@ -174,7 +174,7 @@ export default function App() {
           const copy = [...prev];
           const idx = copy.length - 1;
           const last = copy[idx];
-          if (!last || last.role !== 'assistant') return prev;
+          if (last?.role !== 'assistant') return prev;
           const parts = last.parts ? [...last.parts] : [];
           if (parts.length === 0) {
             parts.push({ text: piece });
@@ -205,7 +205,7 @@ export default function App() {
                 const copy = [...prev];
                 const idx = copy.length - 1;
                 const last = copy[idx];
-                if (!last || last.role !== 'assistant') return prev;
+                if (last?.role !== 'assistant') return prev;
 
                 // Chain handling: several meta events arrive per turn (one per
                 // agent). When the active agent changes mid-answer we open a

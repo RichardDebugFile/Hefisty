@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
 
 # Namespace estable para IDs deterministas (reingesta idempotente).
 _NS = uuid.UUID("00000000-0000-0000-0000-00000000d1cc")
@@ -70,6 +70,13 @@ class KnowledgeStore:
             self._c.delete_collection(collection)
             return True
         return False
+
+    def delete_point(self, collection: str, index_str: str) -> None:
+        """Borra un punto por su índice determinista (mismo esquema que upsert)."""
+        if not self._c.collection_exists(collection):
+            return
+        pid = str(uuid.uuid5(_NS, f"{collection}:{index_str}"))
+        self._c.delete(collection, points_selector=PointIdsList(points=[pid]))
 
     def collections(self) -> list[tuple[str, int]]:
         names = [c.name for c in self._c.get_collections().collections]

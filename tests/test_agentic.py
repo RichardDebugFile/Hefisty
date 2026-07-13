@@ -87,4 +87,4 @@ async def test_agentic_parses_text_tool_call(tmp_path):
     events: list[str] = []
     res = await agent.run("lista los .py", events.append)
     assert res["steps"] == 1  # el glob se ejecutó vía fallback de texto
-    assert "app.py" in events[0]
+    assert events and "app.py" in events[0]

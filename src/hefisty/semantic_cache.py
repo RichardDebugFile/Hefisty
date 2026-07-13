@@ -8,6 +8,7 @@ se comporta como cache vacía.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from .config import Settings
@@ -33,7 +34,9 @@ class SemanticCache:
             vecs = await self._o.embed(self._s.model_embed, [query])
             if not vecs:
                 return None
-            hits = self._store.search(self._col, vecs[0], 1, self._s.semantic_threshold)
+            hits = await asyncio.to_thread(
+                self._store.search, self._col, vecs[0], 1, self._s.semantic_threshold
+            )
         except Exception:
             return None
         if not hits:
@@ -48,19 +51,21 @@ class SemanticCache:
             vecs = await self._o.embed(self._s.model_embed, [query])
             if not vecs:
                 return
-            self._store.ensure(self._col, dim=len(vecs[0]))
-            self._store.upsert(
-                self._col,
-                [vecs[0]],
-                [
-                    {
-                        "text": json.dumps(value),
-                        "source": query[:80],
-                        "section": "",
-                        "language": "",
-                        "index": f"sem:{query}",
-                    }
-                ],
-            )
+            payload = {
+                "text": json.dumps(value),
+                "source": query[:80],
+                "section": "",
+                "language": "",
+                "index": f"sem:{query}",
+            }
+            await asyncio.to_thread(self._store.ensure, self._col, len(vecs[0]))
+            await asyncio.to_thread(self._store.upsert, self._col, [vecs[0]], [payload])
+        except Exception:
+            pass
+
+    async def delete(self, query: str) -> None:
+        """Invalida la entrada semántica de una query (para el 👎)."""
+        try:
+            await asyncio.to_thread(self._store.delete_point, self._col, f"sem:{query}")
         except Exception:
             pass

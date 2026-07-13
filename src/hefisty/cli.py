@@ -16,7 +16,7 @@ app = typer.Typer(add_completion=False, help="Hefisty: sistema de IA local orque
 
 def _api() -> tuple[str, dict[str, str]]:
     s = get_settings()
-    base = f"http://{s.host}:{s.port}"
+    base = f"http://{s.host}:{s.port}"  # NOSONAR: gateway local en loopback (127.0.0.1)
     headers = {"Authorization": f"Bearer {s.api_token}"} if s.api_token else {}
     return base, headers
 

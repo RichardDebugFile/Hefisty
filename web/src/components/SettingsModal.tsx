@@ -25,8 +25,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+    <div
+      className="modal-backdrop"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' || e.key === 'Enter') onClose();
+      }}
+    >
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
         <h2 className="modal__title">Ajustes</h2>
         <label className="modal__label" htmlFor="token-input">
           Token de acceso

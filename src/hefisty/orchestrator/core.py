@@ -145,6 +145,9 @@ class Orchestrator:
         """Emite eventos {type: meta|content}. La primera es meta (agente/modelo)."""
         cache_msgs: list[Message] = [*session.messages, {"role": "user", "content": user_text}]
         cache_key = self._cache.key_for(cache_msgs, _CACHE_NS)
+        # La cache semántica solo aplica al primer turno (sin historial): un follow-up como
+        # "sigue" o "¿en qué íbamos?" depende del contexto de SU sesión y no debe compartirse.
+        semantic_ok = self._semantic is not None and not session.messages
 
         cached = await self._cache.get(cache_msgs, _CACHE_NS)
         if cached is not None:
@@ -188,8 +191,8 @@ class Orchestrator:
             cacheable = False  # tareas del Coder no se cachean (el workspace cambia)
         else:
             agent, model = "hefisty", self._s.model_frontal
-            # Cache semántica (parafraseos): solo charla/conocimiento.
-            if self._semantic is not None:
+            # Cache semántica (parafraseos): solo charla/conocimiento, primer turno.
+            if semantic_ok:
                 sc = await self._semantic.get(user_text)
                 if sc is not None:
                     yield {
@@ -216,23 +219,17 @@ class Orchestrator:
             "cache_key": cache_key,
             "sources": sources,
         }
-        parts: list[str] = []
-        redacted = 0
-        async for piece in gen:
-            piece, n = redact_credentials(piece)
-            redacted += n
-            parts.append(piece)
-            yield {"type": "content", "text": piece}
-
-        # Redacción final (por si una credencial cruzó el límite de un chunk de streaming).
-        content, n2 = redact_credentials("".join(parts))
-        if redacted + n2:
-            logger.warning("salida: %d credenciales redactadas", redacted + n2)
+        content = ""
+        async for kind, text in self._stream_redacted(gen):
+            if kind == "content":
+                yield {"type": "content", "text": text}
+            else:
+                content = text
         await self._persist(session, user_text, content, agent)
         if cacheable:
             value = {"agent": agent, "model": model, "content": content, "sources": sources}
             await self._cache.set(cache_msgs, _CACHE_NS, json.dumps(value), self._s.cache_ttl_chat)
-            if self._semantic is not None:
+            if semantic_ok:
                 await self._semantic.put(user_text, value)
 
     async def _stream_chain(
@@ -293,12 +290,13 @@ class Orchestrator:
                 "sources": sources,
                 "chain": self._chain_state(session),
             }
-            parts: list[str] = []
-            async for piece in agent_obj.stream(msgs):
-                piece, _n = redact_credentials(piece)
-                parts.append(piece)
-                yield {"type": "content", "text": piece}
-            st["result"] = "".join(parts)
+            result = ""
+            async for kind, text in self._stream_redacted(agent_obj.stream(msgs)):
+                if kind == "content":
+                    yield {"type": "content", "text": text}
+                else:
+                    result = text
+            st["result"] = result
             st["state"] = "hecha"
             await asyncio.to_thread(self._sessions.save, session)
             prev = st["result"]
@@ -323,6 +321,25 @@ class Orchestrator:
         return "\n\n".join(
             f"### {st['agent']}\n{st['result']}" for st in subtasks if st.get("result")
         )
+
+    @staticmethod
+    async def _stream_redacted(gen: AsyncIterator[str]):
+        """Redacta credenciales sobre un stream aguantando una cola, por si una credencial
+        cruza el límite entre chunks. Emite ('content', txt) y al final ('final', completo)."""
+        tail = 200  # ninguna credencial soportada supera esta longitud
+        acc = ""
+        emitted = 0
+        async for piece in gen:
+            acc += piece
+            red, _ = redact_credentials(acc)
+            safe = max(0, len(red) - tail)
+            if safe > emitted:
+                yield ("content", red[emitted:safe])
+                emitted = safe
+        red, _ = redact_credentials(acc)
+        if len(red) > emitted:
+            yield ("content", red[emitted:])
+        yield ("final", red)
 
     async def _retrieve(self, user_text: str) -> tuple[list[Hit], str | None]:
         if self._retriever is None:

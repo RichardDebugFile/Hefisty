@@ -8,7 +8,7 @@ from pathlib import Path
 from ..config import Settings
 from ..ollama_client import OllamaClient
 from .chunking import chunk_text
-from .loaders import iter_sources, load_file
+from .loaders import iter_sources, load_file, load_jsonl_pairs
 from .store import KnowledgeStore
 
 _EMBED_BATCH = 64
@@ -34,9 +34,23 @@ async def ingest_path(
     payloads: list[dict] = []
     files = 0
     for src in iter_sources(root):
-        text, kind, lang = load_file(src)
         files += 1
         rel = src.relative_to(root).as_posix() if src.is_relative_to(root) else src.name
+        if src.suffix.lower() == ".jsonl":
+            # Pares Q&A: se embebe la pregunta; la respuesta va en el payload.
+            for i, (u, a) in enumerate(load_jsonl_pairs(src)):
+                texts.append(u)
+                payloads.append(
+                    {
+                        "text": f"P: {u}\nR: {a}" if a else u,
+                        "source": rel,
+                        "section": u[:60],
+                        "language": language,
+                        "index": f"{rel}#{i}",
+                    }
+                )
+            continue
+        text, kind, lang = load_file(src)
         for ch in chunk_text(text, kind, settings.chunk_tokens, settings.chunk_overlap):
             texts.append(ch.text)
             payloads.append(

@@ -38,7 +38,7 @@ function splitSegments(text: string): Segment[] {
   return segments;
 }
 
-function PartBody({ text }: { text: string }) {
+function PartBody({ text }: Readonly<{ text: string }>) {
   const segments = splitSegments(text);
   return (
     <>
@@ -66,7 +66,7 @@ export function MessageBubble({
   cached,
   sources,
   feedback,
-}: {
+}: Readonly<{
   role: Role;
   content: string;
   parts?: ContentPart[];
@@ -74,7 +74,7 @@ export function MessageBubble({
   cached?: boolean;
   sources?: Source[];
   feedback?: FeedbackTarget;
-}) {
+}>) {
   const isUser = role === 'user';
   // Chain-aware turns render as parts; everything else as a single block.
   const displayParts: ContentPart[] =
@@ -96,7 +96,7 @@ export function MessageBubble({
         </div>
         <div className="msg__content">
           {displayParts.map((part, pi) => (
-            <div className="msg__part" key={pi}>
+            <div className="msg__part" key={`${part.agent ?? 'agente'}::${part.text}`}>
               {pi > 0 && (
                 <div className="msg__chain-sep" role="separator">
                   <span>— {part.agent ?? 'agente'} —</span>

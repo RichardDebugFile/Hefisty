@@ -205,6 +205,21 @@ async def test_chain_coder_then_revisor(tmp_path):
     assert "hallazgo" in "".join(parts)  # hallazgos del revisor en la respuesta
 
 
+async def test_streaming_redacts_credential_split_across_chunks(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "reply")
+
+    async def split_stream(model, messages, *, keep_alive="10m", options=None):
+        # el modelo emite una credencial partida en varios chunks de streaming
+        for piece in ["Tu token es sk-", "ABCDEFGHIJKLMNOPQR", "STUVWXYZ0123456789", " listo."]:
+            yield piece
+
+    ollama.chat_stream = split_stream
+    s = sessions.create()
+    _meta, text = await _collect(orch.stream_turn(s, "dame el token"))
+    assert "[REDACTADO]" in text
+    assert "sk-ABCDEF" not in text  # la credencial cruda no llega al cliente
+
+
 async def test_resume_continues_chain_from_pending(tmp_path):
     orch, sessions = _build_chain(tmp_path)
     s = sessions.create()

@@ -23,6 +23,10 @@ RUN pip install --no-cache-dir -e .
 # Front compilado que el gateway sirve en '/'.
 COPY --from=web /web/dist ./web/dist
 
+# Usuario no-root.
+RUN useradd -m -u 10001 appuser && chown -R appuser /app
+USER appuser
+
 EXPOSE 8080
 # Ollama corre en el host (host.docker.internal); Redis/Qdrant vía compose.
 # En producción define HEFISTY_API_TOKEN (el gateway avisa si expone sin token).
