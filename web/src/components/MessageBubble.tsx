@@ -1,4 +1,13 @@
-import type { Role, Source } from '../api/types';
+import type { AgentName, Role, Source } from '../api/types';
+import { FeedbackControls, type FeedbackTarget } from './FeedbackControls';
+
+// One contiguous slice of an assistant answer produced by a single agent.
+// Chained turns yield several parts (coder, then revisor, …); a plain turn
+// yields one. Separators between parts mark where the active agent changed.
+export interface ContentPart {
+  agent?: AgentName;
+  text: string;
+}
 
 interface Segment {
   type: 'text' | 'code';
@@ -29,21 +38,47 @@ function splitSegments(text: string): Segment[] {
   return segments;
 }
 
+function PartBody({ text }: { text: string }) {
+  const segments = splitSegments(text);
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.type === 'code' ? (
+          <pre className="code-block" key={i}>
+            {seg.lang && <span className="code-block__lang">{seg.lang}</span>}
+            <code>{seg.content}</code>
+          </pre>
+        ) : (
+          <p className="msg__text" key={i}>
+            {seg.content}
+          </p>
+        ),
+      )}
+    </>
+  );
+}
+
 export function MessageBubble({
   role,
   content,
+  parts,
   streaming,
   cached,
   sources,
+  feedback,
 }: {
   role: Role;
   content: string;
+  parts?: ContentPart[];
   streaming?: boolean;
   cached?: boolean;
   sources?: Source[];
+  feedback?: FeedbackTarget;
 }) {
   const isUser = role === 'user';
-  const segments = splitSegments(content);
+  // Chain-aware turns render as parts; everything else as a single block.
+  const displayParts: ContentPart[] =
+    parts && parts.length > 0 ? parts : [{ text: content }];
 
   return (
     <div className={`msg msg--${isUser ? 'user' : 'assistant'}`}>
@@ -60,18 +95,16 @@ export function MessageBubble({
           )}
         </div>
         <div className="msg__content">
-          {segments.map((seg, i) =>
-            seg.type === 'code' ? (
-              <pre className="code-block" key={i}>
-                {seg.lang && <span className="code-block__lang">{seg.lang}</span>}
-                <code>{seg.content}</code>
-              </pre>
-            ) : (
-              <p className="msg__text" key={i}>
-                {seg.content}
-              </p>
-            ),
-          )}
+          {displayParts.map((part, pi) => (
+            <div className="msg__part" key={pi}>
+              {pi > 0 && (
+                <div className="msg__chain-sep" role="separator">
+                  <span>— {part.agent ?? 'agente'} —</span>
+                </div>
+              )}
+              <PartBody text={part.text} />
+            </div>
+          ))}
           {streaming && <span className="msg__caret" aria-hidden="true" />}
         </div>
         {!isUser && sources && sources.length > 0 && (
@@ -91,6 +124,7 @@ export function MessageBubble({
             </ul>
           </details>
         )}
+        {feedback && <FeedbackControls target={feedback} />}
       </div>
     </div>
   );
