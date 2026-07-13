@@ -58,6 +58,8 @@ def create_app(
     ollama = ollama or OllamaClient(settings.ollama_url)
     sessions = sessions or SessionStore(settings.db_path)
     cache = cache or L1Cache(settings.redis_url)
+    knowledge = KnowledgeStore(settings.qdrant_url)
+    semantic = SemanticCache(settings, ollama, knowledge)
     if orchestrator is None:
         coder = Coder(ollama, load_role("coder"), settings.keep_alive)
         agents = {"coder": coder}
@@ -67,7 +69,6 @@ def create_app(
             except FileNotFoundError:
                 pass
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
-        knowledge = KnowledgeStore(settings.qdrant_url)
         orchestrator = Orchestrator(
             settings,
             ollama,
@@ -76,7 +77,7 @@ def create_app(
             coder,
             router,
             retriever=Retriever(settings, ollama, knowledge),
-            semantic=SemanticCache(settings, ollama, knowledge),
+            semantic=semantic,
             agents=agents,
         )
     auth = make_auth_dep(settings.api_token)
@@ -241,9 +242,23 @@ def create_app(
             sources=body.sources or [],
         )
         invalidated = False
-        if body.vote == "down" and body.cache_key:
-            await cache.delete_key(body.cache_key)
-            invalidated = True
+        if body.vote == "down":
+            if body.cache_key:
+                await cache.delete_key(body.cache_key)
+                invalidated = True
+            # Invalida también la entrada de cache semántica del turno (por su query).
+            if body.session_id:
+                sess = await asyncio.to_thread(sessions.get, body.session_id)
+                if sess is not None:
+                    users = [m["content"] for m in sess.messages if m["role"] == "user"]
+                    q = None
+                    if body.turn_index is not None and 0 <= body.turn_index < len(users):
+                        q = users[body.turn_index]
+                    elif users:
+                        q = users[-1]
+                    if q is not None:
+                        await semantic.delete(q)
+                        invalidated = True
         return {"id": fid, "invalidated_cache": invalidated}
 
     @app.get("/v1/models", dependencies=[Depends(auth)])

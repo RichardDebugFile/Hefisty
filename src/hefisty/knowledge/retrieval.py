@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ..config import Settings
 from ..ollama_client import OllamaClient
 from .store import Hit, KnowledgeStore
@@ -21,7 +23,9 @@ class Retriever:
         hits: list[Hit] = []
         for col in collections:
             hits.extend(
-                self._store.search(col, vec, self._s.retrieval_k, self._s.retrieval_score_min)
+                await asyncio.to_thread(
+                    self._store.search, col, vec, self._s.retrieval_k, self._s.retrieval_score_min
+                )
             )
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[: self._s.retrieval_k]
