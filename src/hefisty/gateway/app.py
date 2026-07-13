@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
@@ -61,7 +62,15 @@ def create_app(
         )
     auth = make_auth_dep(settings.api_token)
 
-    app = FastAPI(title="Hefisty", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # Cierre limpio de conexiones en el shutdown (guardas para fakes de tests).
+        for closer in (getattr(ollama, "aclose", None), getattr(cache, "close", None)):
+            if closer is not None:
+                await closer()
+
+    app = FastAPI(title="Hefisty", version="0.1.0", lifespan=lifespan)
 
     def _sanitize(req: ChatRequest) -> str:
         users = [m for m in req.messages if m.role == "user"]
