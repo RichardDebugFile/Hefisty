@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import typer
@@ -136,6 +138,78 @@ def status() -> None:
     typer.echo(f"redis:   {mark(h['redis'])}")
     typer.echo(f"qdrant:  {mark(h['qdrant'])}")
     typer.echo(f"modelos cargados: {', '.join(h['loaded_models']) or 'ninguno'}")
+
+
+# --- Conocimiento (RAG) ---
+
+knowledge_app = typer.Typer(help="Diccionarios de conocimiento (RAG).")
+app.add_typer(knowledge_app, name="knowledge")
+
+
+def _knowledge():
+    from .knowledge.store import KnowledgeStore
+    from .ollama_client import OllamaClient
+
+    s = get_settings()
+    return s, OllamaClient(s.ollama_url), KnowledgeStore(s.qdrant_url)
+
+
+@knowledge_app.command("ingest")
+def knowledge_ingest(
+    coleccion: str = typer.Argument(..., help="Nombre de la colección/diccionario."),
+    path: str = typer.Option(..., "--path", help="Directorio con las fuentes."),
+) -> None:
+    """Ingesta un directorio de fuentes en una colección."""
+    from .knowledge.ingest import ingest_path
+
+    p = Path(path)
+    if not p.is_dir():
+        typer.secho(f"No existe el directorio: {path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    s, ollama, store = _knowledge()
+    res = asyncio.run(ingest_path(s, ollama, store, coleccion, p, language=coleccion))
+    typer.secho(
+        f"ingesta '{res.collection}': {res.files} archivos → {res.chunks} chunks",
+        fg=typer.colors.GREEN,
+    )
+
+
+@knowledge_app.command("status")
+def knowledge_status() -> None:
+    """Lista las colecciones y su conteo de chunks."""
+    _, _, store = _knowledge()
+    cols = store.collections()
+    if not cols:
+        typer.echo("No hay colecciones.")
+        return
+    for name, cnt in cols:
+        typer.echo(f"{name}: {cnt} chunks")
+
+
+@knowledge_app.command("delete")
+def knowledge_delete(
+    coleccion: str = typer.Argument(..., help="Colección a borrar."),
+) -> None:
+    """Borra una colección."""
+    _, _, store = _knowledge()
+    if store.delete(coleccion):
+        typer.secho(f"borrada '{coleccion}'", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"no existe '{coleccion}'", fg=typer.colors.RED, err=True)
+
+
+@app.command("index")
+def index_cmd(ruta: str = typer.Argument(".", help="Ruta del repo a indexar.")) -> None:
+    """Índice semántico del repo (incremental) para el search_code del Coder."""
+    from .knowledge.repo_index import index_repo
+
+    s, ollama, store = _knowledge()
+    res = asyncio.run(index_repo(s, ollama, store, Path(ruta)))
+    typer.secho(
+        f"índice '{res.collection}': {res.scanned} archivos, {res.changed} cambiados "
+        f"→ {res.chunks} chunks",
+        fg=typer.colors.GREEN,
+    )
 
 
 if __name__ == "__main__":
