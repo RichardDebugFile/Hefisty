@@ -1,0 +1,167 @@
+"""Gateway FastAPI: único punto de entrada.
+
+Escucha en 127.0.0.1, autentica con Bearer, aplica protección de entrada mínima
+(límite de tamaño), expone la API OpenAI-compatible con streaming SSE, gestiona
+sesiones y sirve el front compilado (`web/dist`) en `/`.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+
+import httpx
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from ..agents.coder import Coder
+from ..cache import L1Cache
+from ..config import Settings, get_settings
+from ..ollama_client import OllamaClient
+from ..orchestrator.core import Orchestrator
+from ..orchestrator.router import Router
+from ..orchestrator.sessions import SessionStore
+from ..roles import load_role
+from .auth import make_auth_dep
+from .schemas import ChatRequest, RenameRequest
+
+
+async def _qdrant_ok(url: str) -> bool:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            r = await client.get(f"{url.rstrip('/')}/healthz")
+            return r.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    ollama: OllamaClient | None = None,
+    sessions: SessionStore | None = None,
+    cache: L1Cache | None = None,
+    orchestrator: Orchestrator | None = None,
+) -> FastAPI:
+    """Construye la app. Los componentes son inyectables para tests."""
+    settings = settings or get_settings()
+    ollama = ollama or OllamaClient(settings.ollama_url)
+    sessions = sessions or SessionStore(settings.db_path)
+    cache = cache or L1Cache(settings.redis_url)
+    if orchestrator is None:
+        coder = Coder(ollama, load_role("coder"), settings.keep_alive)
+        router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
+        orchestrator = Orchestrator(settings, ollama, sessions, cache, coder, router)
+    auth = make_auth_dep(settings.api_token)
+
+    app = FastAPI(title="Hefisty", version="0.1.0")
+
+    def _sanitize(req: ChatRequest) -> str:
+        users = [m for m in req.messages if m.role == "user"]
+        if not users:
+            raise HTTPException(status_code=400, detail="Falta un mensaje de usuario")
+        text = users[-1].content
+        if len(text) > settings.max_input_chars:
+            raise HTTPException(status_code=413, detail="Entrada demasiado grande")
+        return text
+
+    @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
+    async def chat(req: ChatRequest):  # noqa: ANN202 - respuesta dinámica (JSON o SSE)
+        user_text = _sanitize(req)
+        session = sessions.get(req.session_id) if req.session_id else None
+        if session is None:
+            session = sessions.create()
+
+        if req.stream:
+
+            async def event_gen() -> AsyncIterator[str]:
+                async for ev in orchestrator.stream_turn(session, user_text):
+                    if ev["type"] == "meta":
+                        yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    else:
+                        chunk = {"choices": [{"delta": {"content": ev["text"]}}]}
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+        meta: dict | None = None
+        parts: list[str] = []
+        async for ev in orchestrator.stream_turn(session, user_text):
+            if ev["type"] == "meta":
+                meta = ev
+            else:
+                parts.append(ev["text"])
+        content = "".join(parts)
+        return JSONResponse(
+            {
+                "id": session.id,
+                "object": "chat.completion",
+                "model": meta["model"] if meta else settings.model_frontal,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "hefisty": {
+                    "agent": meta["agent"] if meta else "hefisty",
+                    "session_id": session.id,
+                    "cached": bool(meta["cached"]) if meta else False,
+                },
+            }
+        )
+
+    @app.get("/v1/sessions", dependencies=[Depends(auth)])
+    async def list_sessions():  # noqa: ANN202
+        return {
+            "sessions": [
+                {
+                    "id": s.id,
+                    "title": s.title,
+                    "updated_at": s.updated_at,
+                    "active_agent": s.active_agent,
+                }
+                for s in sessions.list()
+            ]
+        }
+
+    @app.post("/v1/sessions/{session_id}/resume", dependencies=[Depends(auth)])
+    async def resume(session_id: str):  # noqa: ANN202
+        s = sessions.get(session_id)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        return {
+            "id": s.id,
+            "title": s.title,
+            "active_agent": s.active_agent,
+            "messages": s.messages,
+        }
+
+    @app.patch("/v1/sessions/{session_id}", dependencies=[Depends(auth)])
+    async def rename(session_id: str, body: RenameRequest):  # noqa: ANN202
+        if sessions.get(session_id) is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        sessions.rename(session_id, body.title)
+        return {"id": session_id, "title": body.title}
+
+    @app.get("/health")
+    async def health():  # noqa: ANN202
+        return {
+            "status": "ok",
+            "ollama": await ollama.ping(),
+            "redis": await cache.ping(),
+            "qdrant": await _qdrant_ok(settings.qdrant_url),
+            "loaded_models": await ollama.loaded_models(),
+        }
+
+    # El front compilado se sirve en '/'. Se monta al final para no tapar la API.
+    if settings.web_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(settings.web_dist), html=True), name="web")
+
+    return app
+
+
+app = create_app()
