@@ -40,12 +40,23 @@ export interface HealthResponse {
   loaded_models: string[];
 }
 
+// A single RAG fragment retrieved from the knowledge dictionary.
+export interface Source {
+  source: string;
+  section: string;
+  score: number;
+}
+
 // SSE meta event emitted first in a chat stream.
 export interface MetaEvent {
   type: 'meta';
   session_id: string;
   agent: AgentName;
   model: string;
+  // Whether this turn was served from cache.
+  cached?: boolean;
+  // RAG fragments that grounded the answer.
+  sources?: Source[];
 }
 
 // OpenAI-style streamed chunk.

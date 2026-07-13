@@ -1,4 +1,4 @@
-import type { Role } from '../api/types';
+import type { Role, Source } from '../api/types';
 
 interface Segment {
   type: 'text' | 'code';
@@ -33,10 +33,14 @@ export function MessageBubble({
   role,
   content,
   streaming,
+  cached,
+  sources,
 }: {
   role: Role;
   content: string;
   streaming?: boolean;
+  cached?: boolean;
+  sources?: Source[];
 }) {
   const isUser = role === 'user';
   const segments = splitSegments(content);
@@ -47,7 +51,14 @@ export function MessageBubble({
         {isUser ? 'Tú' : '🔨'}
       </div>
       <div className="msg__body">
-        <div className="msg__author">{isUser ? 'Tú' : 'Hefisty'}</div>
+        <div className="msg__author">
+          <span>{isUser ? 'Tú' : 'Hefisty'}</span>
+          {!isUser && cached && (
+            <span className="msg__cache" title="Respuesta servida desde la cache">
+              cache
+            </span>
+          )}
+        </div>
         <div className="msg__content">
           {segments.map((seg, i) =>
             seg.type === 'code' ? (
@@ -63,6 +74,23 @@ export function MessageBubble({
           )}
           {streaming && <span className="msg__caret" aria-hidden="true" />}
         </div>
+        {!isUser && sources && sources.length > 0 && (
+          <details className="msg__sources">
+            <summary className="msg__sources-summary">Fuentes ({sources.length})</summary>
+            <ul className="msg__sources-list">
+              {sources.map((s, i) => (
+                <li className="msg__source" key={`${s.source}-${i}`}>
+                  <span className="msg__source-file">{s.source}</span>
+                  <span className="msg__source-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="msg__source-section">{s.section}</span>
+                  <span className="msg__source-score">{s.score.toFixed(2)}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     </div>
   );
