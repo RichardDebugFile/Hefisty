@@ -31,7 +31,21 @@ class FakeCache:
         return True
 
 
-def _client(tmp_path, token=""):
+class RaisingOrch:
+    """Simula un fallo del modelo a mitad del turno (tras emitir meta)."""
+
+    async def stream_turn(self, session, user_text):
+        yield {
+            "type": "meta",
+            "session_id": session.id,
+            "agent": "coder",
+            "model": "m",
+            "cached": False,
+        }
+        raise RuntimeError("ollama caído")
+
+
+def _client(tmp_path, token="", orch=None):
     settings = Settings(api_token=token, data_dir=tmp_path)
     sessions = SessionStore(tmp_path / "s.db")
     app = create_app(
@@ -39,7 +53,7 @@ def _client(tmp_path, token=""):
         ollama=FakeOllama(),
         sessions=sessions,
         cache=FakeCache(),
-        orchestrator=FakeOrch(),
+        orchestrator=orch or FakeOrch(),
     )
     return TestClient(app), sessions
 
@@ -107,3 +121,35 @@ def test_sessions_lifecycle(tmp_path):
     assert sessions.get(s.id).title == "otro"
 
     assert client.post("/v1/sessions/inexistente/resume").status_code == 404
+
+
+def test_unknown_session_id_returns_404(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hola"}], "session_id": "nope"},
+    )
+    assert r.status_code == 404
+
+
+def test_stream_error_emits_error_event_and_cleans_orphan(tmp_path):
+    client, sessions = _client(tmp_path, orch=RaisingOrch())
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hola"}], "stream": True},
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert '"type": "error"' in body
+    assert "[DONE]" in body
+    assert sessions.list() == []  # sesión huérfana eliminada
+
+
+def test_nonstream_error_returns_503_and_cleans_orphan(tmp_path):
+    client, sessions = _client(tmp_path, orch=RaisingOrch())
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hola"}], "stream": False},
+    )
+    assert r.status_code == 503
+    assert sessions.list() == []
