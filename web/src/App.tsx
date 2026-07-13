@@ -5,7 +5,7 @@ import {
   resumeSession,
   streamChat,
 } from './api/client';
-import type { AgentName, ChatMessage, Role, Session } from './api/types';
+import type { AgentName, ChatMessage, Role, Session, Source } from './api/types';
 import { useHealth } from './hooks/useHealth';
 import { Sidebar } from './components/Sidebar';
 import { MessageBubble } from './components/MessageBubble';
@@ -18,6 +18,8 @@ interface UiMessage {
   id: string;
   role: Role;
   content: string;
+  cached?: boolean;
+  sources?: Source[];
 }
 
 let idSeq = 0;
@@ -146,6 +148,19 @@ export default function App() {
               if (!activeSessionId && meta.session_id) {
                 setActiveSessionId(meta.session_id);
               }
+              // Attach cache flag and RAG sources to the current assistant turn.
+              setMessages((prev) => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.role === 'assistant') {
+                  copy[copy.length - 1] = {
+                    ...last,
+                    cached: meta.cached,
+                    sources: meta.sources,
+                  };
+                }
+                return copy;
+              });
             },
             onDelta: appendToAssistant,
           },
@@ -225,6 +240,8 @@ export default function App() {
                   key={m.id}
                   role={m.role}
                   content={m.content}
+                  cached={m.cached}
+                  sources={m.sources}
                   streaming={
                     streaming && i === messages.length - 1 && m.role === 'assistant'
                   }

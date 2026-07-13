@@ -12,6 +12,7 @@ import type {
   RenameResponse,
   ResumeResponse,
   SessionsResponse,
+  Source,
 } from './types';
 
 export const TOKEN_KEY = 'hefisty_token';
@@ -152,7 +153,15 @@ export async function streamChat(
       return;
     }
     if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'meta') {
-      callbacks.onMeta?.(parsed as MetaEvent);
+      const raw = parsed as MetaEvent;
+      // Normalize the extra fields so downstream state can trust their shape:
+      // `cached` is a strict boolean and `sources` is an array (or undefined).
+      const meta: MetaEvent = {
+        ...raw,
+        cached: raw.cached === true,
+        sources: Array.isArray(raw.sources) ? (raw.sources as Source[]) : undefined,
+      };
+      callbacks.onMeta?.(meta);
       return;
     }
     const chunk = parsed as ChatChunk;

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
@@ -19,6 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from ..agents.coder import Coder
 from ..cache import L1Cache
 from ..config import Settings, get_settings
+from ..knowledge.retrieval import Retriever
+from ..knowledge.store import KnowledgeStore
 from ..ollama_client import OllamaClient
 from ..orchestrator.core import Orchestrator
 from ..orchestrator.router import Router
@@ -53,10 +56,21 @@ def create_app(
     if orchestrator is None:
         coder = Coder(ollama, load_role("coder"), settings.keep_alive)
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
-        orchestrator = Orchestrator(settings, ollama, sessions, cache, coder, router)
+        retriever = Retriever(settings, ollama, KnowledgeStore(settings.qdrant_url))
+        orchestrator = Orchestrator(
+            settings, ollama, sessions, cache, coder, router, retriever=retriever
+        )
     auth = make_auth_dep(settings.api_token)
 
-    app = FastAPI(title="Hefisty", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # Cierre limpio de conexiones en el shutdown (guardas para fakes de tests).
+        for closer in (getattr(ollama, "aclose", None), getattr(cache, "close", None)):
+            if closer is not None:
+                await closer()
+
+    app = FastAPI(title="Hefisty", version="0.1.0", lifespan=lifespan)
 
     def _sanitize(req: ChatRequest) -> str:
         users = [m for m in req.messages if m.role == "user"]

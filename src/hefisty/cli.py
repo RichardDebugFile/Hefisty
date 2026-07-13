@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import typer
@@ -23,6 +25,7 @@ def _api() -> tuple[str, dict[str, str]]:
 def ask(
     prompt: str = typer.Argument(..., help="Lo que quieres pedirle a Hefisty."),
     session: str | None = typer.Option(None, "--session", "-s", help="ID de sesión a continuar."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Muestra el retrieval (fuentes)."),
 ) -> None:
     """Envía una petición y muestra la respuesta en streaming."""
     base, headers = _api()
@@ -46,6 +49,15 @@ def ask(
                     if data.get("cached"):
                         tag += " (cache)"
                     typer.secho(tag, fg=typer.colors.CYAN, err=True)
+                    if verbose:
+                        for s in data.get("sources", []):
+                            typer.secho(
+                                f"  ↳ {s['source']} ({s['section']}) score={s['score']}",
+                                fg=typer.colors.BLUE,
+                                err=True,
+                            )
+                elif data.get("type") == "error":
+                    typer.secho(f"\n[error] {data.get('message')}", fg=typer.colors.RED, err=True)
                 else:
                     typer.echo(data["choices"][0]["delta"].get("content", ""), nl=False)
         typer.echo()
@@ -136,6 +148,121 @@ def status() -> None:
     typer.echo(f"redis:   {mark(h['redis'])}")
     typer.echo(f"qdrant:  {mark(h['qdrant'])}")
     typer.echo(f"modelos cargados: {', '.join(h['loaded_models']) or 'ninguno'}")
+
+
+# --- Conocimiento (RAG) ---
+
+knowledge_app = typer.Typer(help="Diccionarios de conocimiento (RAG).")
+app.add_typer(knowledge_app, name="knowledge")
+
+
+def _knowledge():
+    from .knowledge.store import KnowledgeStore
+    from .ollama_client import OllamaClient
+
+    s = get_settings()
+    return s, OllamaClient(s.ollama_url), KnowledgeStore(s.qdrant_url)
+
+
+@knowledge_app.command("ingest")
+def knowledge_ingest(
+    coleccion: str = typer.Argument(..., help="Nombre de la colección/diccionario."),
+    path: str = typer.Option(..., "--path", help="Directorio con las fuentes."),
+) -> None:
+    """Ingesta un directorio de fuentes en una colección."""
+    from .knowledge.ingest import ingest_path
+
+    p = Path(path)
+    if not p.is_dir():
+        typer.secho(f"No existe el directorio: {path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    s, ollama, store = _knowledge()
+    res = asyncio.run(ingest_path(s, ollama, store, coleccion, p, language=coleccion))
+    typer.secho(
+        f"ingesta '{res.collection}': {res.files} archivos -> {res.chunks} chunks",
+        fg=typer.colors.GREEN,
+    )
+
+
+@knowledge_app.command("status")
+def knowledge_status() -> None:
+    """Lista las colecciones y su conteo de chunks."""
+    _, _, store = _knowledge()
+    cols = store.collections()
+    if not cols:
+        typer.echo("No hay colecciones.")
+        return
+    for name, cnt in cols:
+        typer.echo(f"{name}: {cnt} chunks")
+
+
+@knowledge_app.command("delete")
+def knowledge_delete(
+    coleccion: str = typer.Argument(..., help="Colección a borrar."),
+) -> None:
+    """Borra una colección."""
+    _, _, store = _knowledge()
+    if store.delete(coleccion):
+        typer.secho(f"borrada '{coleccion}'", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"no existe '{coleccion}'", fg=typer.colors.RED, err=True)
+
+
+@app.command("index")
+def index_cmd(ruta: str = typer.Argument(".", help="Ruta del repo a indexar.")) -> None:
+    """Índice semántico del repo (incremental) para el search_code del Coder."""
+    from .knowledge.repo_index import index_repo
+
+    s, ollama, store = _knowledge()
+    res = asyncio.run(index_repo(s, ollama, store, Path(ruta)))
+    typer.secho(
+        f"indice '{res.collection}': {res.scanned} archivos, {res.changed} cambiados "
+        f"-> {res.chunks} chunks",
+        fg=typer.colors.GREEN,
+    )
+
+
+@app.command("code")
+def code_cmd(
+    tarea: str = typer.Argument(..., help="Tarea de código a resolver en el workspace."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Muestra las llamadas a tools."),
+) -> None:
+    """El Coder resuelve una tarea con sus herramientas (glob/grep/read_range/edit/search_code)."""
+    from .agents.agentic import AgenticCoder
+    from .knowledge.repo_index import collection_name
+    from .knowledge.retrieval import Retriever
+    from .knowledge.store import KnowledgeStore
+    from .ollama_client import OllamaClient
+    from .roles import load_role
+
+    s = get_settings()
+    s.workspace_dir.mkdir(parents=True, exist_ok=True)
+    ollama = OllamaClient(s.ollama_url)
+    agent = AgenticCoder(
+        ollama,
+        load_role("coder"),
+        s.workspace_dir,
+        s,
+        retriever=Retriever(s, ollama, KnowledgeStore(s.qdrant_url)),
+        repo_collection=collection_name(s.workspace_dir),
+    )
+
+    def on_event(ev: str) -> None:
+        if verbose:
+            typer.secho(f"  · {ev}", fg=typer.colors.BLUE, err=True)
+
+    async def _go() -> dict:
+        try:
+            return await agent.run(tarea, on_event)
+        finally:
+            await ollama.aclose()
+
+    res = asyncio.run(_go())
+    typer.echo(res["answer"])
+    if res["touched"]:
+        typer.secho(
+            f"archivos tocados: {', '.join(res['touched'])}", fg=typer.colors.GREEN, err=True
+        )
 
 
 if __name__ == "__main__":
