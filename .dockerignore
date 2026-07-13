@@ -1,0 +1,21 @@
+# Contexto de build mínimo: nada de artefactos locales ni material privado.
+.git
+.github
+.venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+node_modules
+web/node_modules
+web/dist
+data
+sessions
+logs
+.env
+.env.*
+prompts
+REVIEW_FASE2.md
+docs
+docker
+scripts

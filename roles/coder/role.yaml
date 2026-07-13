@@ -1,0 +1,11 @@
+# Manifiesto del rol Coder (esquema en docs/ROLES.md).
+name: coder
+description: "Agente de programación: escribe, corrige, revisa y explica código."
+triggers: ["código", "programa", "función", "bug", "script", "refactor", "test", "clase"]
+model: qwen2.5-coder:14b
+system_prompt: prompts/coder.md
+knowledge:
+  collection: coder       # colección Qdrant; se puebla en Fase 3
+  sources: []
+tools: [leer_archivo, escribir_archivo, listar_directorio]
+lora: null

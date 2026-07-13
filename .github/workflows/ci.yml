@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   lint:
@@ -32,7 +32,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras
-      - run: uv run pytest -q  # modelos mockeados: CI no tiene GPU
+      # Modelos mockeados: CI no tiene GPU. Exit 5 (sin tests, p. ej. fases tempranas)
+      # se trata como aviso, no como fallo.
+      - name: pytest
+        run: |
+          uv run pytest -q
+          code=$?
+          if [ "$code" -eq 5 ]; then echo "::warning::no se recolectaron tests"; exit 0; fi
+          exit "$code"
 
   build:
     runs-on: ubuntu-latest

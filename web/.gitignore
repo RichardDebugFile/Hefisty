@@ -1,0 +1,11 @@
+# Build output (also ignored by the repo root .gitignore)
+dist/
+node_modules/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Vite / tooling caches
+.vite/
+
+# pnpm-lock.yaml is intentionally NOT ignored — it is the reproducible lockfile.

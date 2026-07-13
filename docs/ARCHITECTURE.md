@@ -6,7 +6,7 @@ Hefisty se organiza en capas: gateway con protecciones → cache → orquestador
 
 ```mermaid
 flowchart TB
-    U[Usuario / CLI / IDE / API] --> GW
+    U[Usuario\nWeb UI / CLI / API] --> GW
 
     subgraph GW[1. Gateway]
         IP[Protección de entrada\nsanitización, límites, prompt-injection]
@@ -48,6 +48,9 @@ flowchart TB
 ```
 
 ## Componentes
+
+### 0. Front (web propia)
+Interfaz principal: SPA de chat (React + Vite en `web/`) compilada a estáticos y servida por el propio gateway en `http://localhost` — sin servidor extra ni dependencia de nube. Características: streaming de respuestas (SSE), lista de sesiones (crear/retomar/renombrar), indicador de qué agente está trabajando y qué modelo está cargado, y vista de roles instalados. La CLI (`hefisty ask`) se mantiene para uso rápido y scripting. El gateway expone además API OpenAI-compatible, así que cualquier cliente estándar puede conectarse como alternativa.
 
 ### 1. Gateway (FastAPI)
 Único punto de entrada. Autenticación por token local, rate limiting, y las dos protecciones unificadas aquí: sanitización de entrada (detección de prompt injection con reglas + modelo pequeño) y validación de salida (no filtrar secretos, código sintácticamente válido cuando aplique).
