@@ -107,3 +107,46 @@ async def test_identical_request_hits_cache(tmp_path):
     meta, _ = await _collect(orch.stream_turn(s2, "hola"))
     assert meta["cached"] is True
     assert len(ollama.calls) == calls_before  # no hubo llamadas al modelo
+
+
+class FakeSemantic:
+    def __init__(self, hit=None):
+        self.hit = hit
+        self.put_calls: list = []
+
+    async def get(self, query):
+        return self.hit
+
+    async def put(self, query, value):
+        self.put_calls.append((query, value))
+
+
+async def test_semantic_cache_hit_on_reply(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "reply")
+    orch._semantic = FakeSemantic(
+        hit={"agent": "hefisty", "model": "m", "content": "respuesta cacheada", "sources": []}
+    )
+    s = sessions.create()
+    meta, text = await _collect(orch.stream_turn(s, "¿quién eres tú?"))
+    assert meta["cached"] is True
+    assert text == "respuesta cacheada"
+    assert not any(c[0] == "stream" for c in ollama.calls)  # no se generó
+
+
+async def test_semantic_put_on_reply_generation(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "reply")
+    sem = FakeSemantic(hit=None)
+    orch._semantic = sem
+    s = sessions.create()
+    await _collect(orch.stream_turn(s, "hola"))
+    assert len(sem.put_calls) == 1
+
+
+async def test_coder_turn_is_never_cached(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "delegate")
+    sem = FakeSemantic(hit=None)
+    orch._semantic = sem
+    s = sessions.create()
+    await _collect(orch.stream_turn(s, "escribe una función en python"))
+    assert sem.put_calls == []  # semántica: nunca para el Coder
+    assert orch._cache.store == {}  # exacta: tampoco

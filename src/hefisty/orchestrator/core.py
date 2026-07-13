@@ -21,6 +21,7 @@ from ..knowledge.store import Hit
 from ..ollama_client import Message, OllamaClient
 from ..protections import redact_credentials, sanitize_chunk
 from ..roles import load_identity
+from ..semantic_cache import SemanticCache
 from .router import Router
 from .sessions import Session, SessionStore
 
@@ -83,6 +84,7 @@ class Orchestrator:
         coder: Coder,
         router: Router,
         retriever: Retriever | None = None,
+        semantic: SemanticCache | None = None,
     ) -> None:
         self._s = settings
         self._ollama = ollama
@@ -91,6 +93,7 @@ class Orchestrator:
         self._coder = coder
         self._router = router
         self._retriever = retriever
+        self._semantic = semantic
         self._identity = load_identity()
 
     async def decide(self, session: Session, user_text: str) -> str:
@@ -163,11 +166,27 @@ class Orchestrator:
                     for h in hits
                 ]
             gen = self._coder.stream(coder_msgs)
-            ttl = self._s.cache_ttl_code
+            cacheable = False  # tareas del Coder no se cachean (el workspace cambia)
         else:
             agent, model = "hefisty", self._s.model_frontal
+            # Cache semántica (parafraseos): solo charla/conocimiento.
+            if self._semantic is not None:
+                sc = await self._semantic.get(user_text)
+                if sc is not None:
+                    yield {
+                        "type": "meta",
+                        "session_id": session.id,
+                        "agent": sc.get("agent", agent),
+                        "model": sc.get("model", model),
+                        "cached": True,
+                        "cache_key": cache_key,
+                        "sources": sc.get("sources", []),
+                    }
+                    yield {"type": "content", "text": sc["content"]}
+                    await self._persist(session, user_text, sc["content"], sc.get("agent", agent))
+                    return
             gen = self._reply_stream(session, user_text)
-            ttl = self._s.cache_ttl_chat
+            cacheable = True
 
         yield {
             "type": "meta",
@@ -191,12 +210,11 @@ class Orchestrator:
         if redacted + n2:
             logger.warning("salida: %d credenciales redactadas", redacted + n2)
         await self._persist(session, user_text, content, agent)
-        await self._cache.set(
-            cache_msgs,
-            _CACHE_NS,
-            json.dumps({"agent": agent, "model": model, "content": content, "sources": sources}),
-            ttl,
-        )
+        if cacheable:
+            value = {"agent": agent, "model": model, "content": content, "sources": sources}
+            await self._cache.set(cache_msgs, _CACHE_NS, json.dumps(value), self._s.cache_ttl_chat)
+            if self._semantic is not None:
+                await self._semantic.put(user_text, value)
 
     async def _retrieve(self, user_text: str) -> tuple[list[Hit], str | None]:
         if self._retriever is None:

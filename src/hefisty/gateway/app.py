@@ -29,6 +29,7 @@ from ..orchestrator.router import Router
 from ..orchestrator.sessions import SessionStore
 from ..protections import detect_injection
 from ..roles import load_role
+from ..semantic_cache import SemanticCache
 from .auth import make_auth_dep
 from .schemas import ChatRequest, FeedbackRequest, RenameRequest
 
@@ -60,9 +61,16 @@ def create_app(
     if orchestrator is None:
         coder = Coder(ollama, load_role("coder"), settings.keep_alive)
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
-        retriever = Retriever(settings, ollama, KnowledgeStore(settings.qdrant_url))
+        knowledge = KnowledgeStore(settings.qdrant_url)
         orchestrator = Orchestrator(
-            settings, ollama, sessions, cache, coder, router, retriever=retriever
+            settings,
+            ollama,
+            sessions,
+            cache,
+            coder,
+            router,
+            retriever=Retriever(settings, ollama, knowledge),
+            semantic=SemanticCache(settings, ollama, knowledge),
         )
     auth = make_auth_dep(settings.api_token)
 
