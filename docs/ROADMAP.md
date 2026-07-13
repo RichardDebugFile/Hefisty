@@ -14,6 +14,7 @@ Cerrar este diseño, elegir nombre, crear repo en GitHub con estos docs, CI bás
 
 ## Fase 3 — Conocimiento y multi-agente
 - Pipeline RAG: ingesta de docs + indexado del repo propio (el "diccionario" del Coder).
+- Primer diccionario: **Kotlin/Android** (prueba de fuego del RAG); luego Python, Java, SQL y patrones de diseño según el plan de ROLES.md.
 - Herramientas de navegación de código: glob/grep, índice semántico del repo, edición por diff.
 - Segundo y tercer agente (Revisor, Docs) + encadenamiento de subtareas con estado en la sesión.
 - Front: panel de agentes en vivo (quién trabaja, VRAM usada) y gestión de roles desde la UI.

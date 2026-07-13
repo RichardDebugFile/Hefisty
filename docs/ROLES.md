@@ -33,6 +33,16 @@ Mismo esquema pero con modelo dedicado (Qwen2.5-Coder 14B) y diccionario más ri
 
 Es jerárquico: delega en **sub-roles por lenguaje** (Python, JS/TS, etc.), cada uno con su diccionario y adaptador LoRA propios sobre el mismo modelo base — especialización sin duplicar modelos en VRAM.
 
+### Plan de diccionarios (orden de construcción)
+
+1. **Kotlin / Android** — el primero. Cubre Kotlin, Android Studio, Jetpack Compose, Gradle y ciclo de vida de apps. Elegido a propósito: los modelos de código abiertos son más débiles en Kotlin/Android que en Python/JS, así que aquí el RAG aporta el máximo valor y sirve de prueba de fuego del enfoque.
+2. **Python** — el modelo base ya es fuerte; el diccionario aporta convenciones del usuario y frameworks concretos.
+3. **Java** — sinergia con el de Kotlin (JVM, Gradle/Maven).
+4. **SQL** — dialectos (PostgreSQL, SQLite, MySQL), optimización de consultas, modelado.
+5. **Patrones de diseño** — colección **transversal**, no de un lenguaje: compartida por todos los sub-roles como referencia de arquitectura (GoF, SOLID, patrones de concurrencia). El retrieval del Coder consulta su diccionario de lenguaje + esta colección común.
+
+Cada diccionario sigue el mismo pipeline de ingesta (fase 3): documentación oficial + guías curadas por el usuario → troceo → embeddings → colección Qdrant propia.
+
 ## La identidad de Hefisty
 
 El modelo pequeño del orquestador es "la cara" del sistema: recibe todo y responde por todos. Es **conversacional antes que enrutadora**: puede mantener una charla, pedir aclaraciones y solo delega en un agente cuando hay una tarea de trabajo definida — la elección de herramienta es automática, invisible para el usuario. Observación clave: debe **saber quién es** — su nombre, su rol de coordinadora, su tono.
