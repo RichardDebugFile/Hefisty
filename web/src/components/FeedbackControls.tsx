@@ -20,7 +20,7 @@ type Phase = 'idle' | 'commenting' | 'sending' | 'done' | 'error';
  * After a successful vote the buttons stay disabled and a subtle confirmation
  * ("gracias") is shown; a 👎 that invalidated the cached answer says so.
  */
-export function FeedbackControls({ target }: { target: FeedbackTarget }) {
+export function FeedbackControls({ target }: Readonly<{ target: FeedbackTarget }>) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [vote, setVote] = useState<FeedbackVote | null>(null);
   const [comment, setComment] = useState('');

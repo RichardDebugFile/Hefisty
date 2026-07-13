@@ -31,9 +31,15 @@ export function getToken(): string {
 }
 
 export function setToken(token: string): void {
+  // The token is a bearer credential the user types in themselves for local
+  // use and is later sent as an `Authorization` header. Before persisting it
+  // we strip surrounding whitespace and any character that is illegal in an
+  // HTTP header value (control chars, CR/LF, spaces), which both sanitizes the
+  // stored value and prevents header injection.
+  const clean = token.trim().replace(/[^\x21-\x7E]/g, '');
   try {
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
+    if (clean) {
+      localStorage.setItem(TOKEN_KEY, clean);
     } else {
       localStorage.removeItem(TOKEN_KEY);
     }

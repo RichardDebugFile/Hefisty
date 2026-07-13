@@ -48,7 +48,7 @@ export interface Source {
 }
 
 // State of a single sub-task inside a chained (multi-agent) turn.
-export type ChainState = 'pendiente' | 'en_curso' | 'hecha' | 'fallida' | string;
+export type ChainState = 'pendiente' | 'en_curso' | 'hecha' | 'fallida';
 
 export interface ChainStep {
   agent: string;

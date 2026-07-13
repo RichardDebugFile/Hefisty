@@ -38,7 +38,7 @@ export function LivePanel({
   chain,
   roles,
   onClose,
-}: {
+}: Readonly<{
   health: HealthState;
   models: ModelsState;
   agent: AgentName | null;
@@ -47,7 +47,7 @@ export function LivePanel({
   chain: ChainStep[] | null;
   roles: RolesState;
   onClose: () => void;
-}) {
+}>) {
   const detail = health.detail;
 
   return (
