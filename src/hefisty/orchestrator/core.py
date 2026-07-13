@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from ..agents.coder import Coder
 from ..cache import L1Cache
 from ..config import Settings
+from ..knowledge.retrieval import Retriever
+from ..knowledge.store import Hit
 from ..ollama_client import Message, OllamaClient
 from ..roles import load_identity
 from .router import Router
@@ -40,6 +43,34 @@ DECISION_INSTRUCTION = (
 # Namespace de modelo para la clave de cache (independiente del agente elegido).
 _CACHE_NS = "auto"
 
+logger = logging.getLogger("hefisty.orchestrator")
+
+# Palabras que activan el diccionario de un lenguaje. Ampliable por rol en fases futuras.
+_LANG_KEYWORDS = {
+    "kotlin": (
+        "kotlin",
+        "android",
+        "compose",
+        "jetpack",
+        "gradle",
+        "coroutine",
+        "corrutina",
+        "room",
+        "hilt",
+        "viewmodel",
+        ".kt",
+        "livedata",
+    ),
+}
+
+
+def detect_language(text: str) -> str | None:
+    low = text.lower()
+    for lang, kws in _LANG_KEYWORDS.items():
+        if any(kw in low for kw in kws):
+            return lang
+    return None
+
 
 class Orchestrator:
     def __init__(
@@ -50,6 +81,7 @@ class Orchestrator:
         cache: L1Cache,
         coder: Coder,
         router: Router,
+        retriever: Retriever | None = None,
     ) -> None:
         self._s = settings
         self._ollama = ollama
@@ -57,6 +89,7 @@ class Orchestrator:
         self._cache = cache
         self._coder = coder
         self._router = router
+        self._retriever = retriever
         self._identity = load_identity()
 
     async def decide(self, session: Session, user_text: str) -> str:
@@ -103,18 +136,30 @@ class Orchestrator:
                 "agent": data["agent"],
                 "model": data["model"],
                 "cached": True,
+                "sources": data.get("sources", []),
             }
             yield {"type": "content", "text": data["content"]}
             await self._persist(session, user_text, data["content"], data["agent"])
             return
 
         action = await self.decide(session, user_text)
+        sources: list[dict] = []
         if action == "delegate":
             agent, model = "coder", self._coder.model
             await self._router.activate(model)
-            gen = self._coder.stream(
-                [*session.messages[-16:], {"role": "user", "content": user_text}]
-            )
+            hits, lang = await self._retrieve(user_text)
+            coder_msgs: list[Message] = [
+                *session.messages[-16:],
+                {"role": "user", "content": user_text},
+            ]
+            if hits:
+                coder_msgs = [self._context_message(hits), *coder_msgs]
+                logger.info("retrieval: %d chunks (lang=%s)", len(hits), lang)
+                sources = [
+                    {"source": h.source, "section": h.section, "score": round(h.score, 3)}
+                    for h in hits
+                ]
+            gen = self._coder.stream(coder_msgs)
             ttl = self._s.cache_ttl_code
         else:
             agent, model = "hefisty", self._s.model_frontal
@@ -127,6 +172,7 @@ class Orchestrator:
             "agent": agent,
             "model": model,
             "cached": False,
+            "sources": sources,
         }
         parts: list[str] = []
         async for piece in gen:
@@ -138,9 +184,34 @@ class Orchestrator:
         await self._cache.set(
             cache_msgs,
             _CACHE_NS,
-            json.dumps({"agent": agent, "model": model, "content": content}),
+            json.dumps({"agent": agent, "model": model, "content": content, "sources": sources}),
             ttl,
         )
+
+    async def _retrieve(self, user_text: str) -> tuple[list[Hit], str | None]:
+        if self._retriever is None:
+            return [], None
+        lang = detect_language(user_text)
+        collections = [c for c in [lang, "patrones"] if c]
+        if not collections:
+            return [], lang
+        try:
+            hits = await self._retriever.retrieve(user_text, collections)
+        except Exception as exc:  # resiliencia: Qdrant caído no rompe el turno
+            logger.warning("retrieval falló: %s", exc)
+            return [], lang
+        return hits, lang
+
+    @staticmethod
+    def _context_message(hits: list[Hit]) -> Message:
+        blocks = "\n\n".join(f"[{h.source}] ({h.section})\n{h.text}" for h in hits)
+        return {
+            "role": "system",
+            "content": (
+                "Contexto recuperado del diccionario. Úsalo si es relevante y CITA la "
+                "fuente entre corchetes, p. ej. [archivo.md]. Si no aporta, ignóralo.\n\n" + blocks
+            ),
+        }
 
     async def _persist(
         self, session: Session, user_text: str, assistant_text: str, agent: str

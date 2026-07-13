@@ -25,6 +25,7 @@ def _api() -> tuple[str, dict[str, str]]:
 def ask(
     prompt: str = typer.Argument(..., help="Lo que quieres pedirle a Hefisty."),
     session: str | None = typer.Option(None, "--session", "-s", help="ID de sesión a continuar."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Muestra el retrieval (fuentes)."),
 ) -> None:
     """Envía una petición y muestra la respuesta en streaming."""
     base, headers = _api()
@@ -48,6 +49,15 @@ def ask(
                     if data.get("cached"):
                         tag += " (cache)"
                     typer.secho(tag, fg=typer.colors.CYAN, err=True)
+                    if verbose:
+                        for s in data.get("sources", []):
+                            typer.secho(
+                                f"  ↳ {s['source']} ({s['section']}) score={s['score']}",
+                                fg=typer.colors.BLUE,
+                                err=True,
+                            )
+                elif data.get("type") == "error":
+                    typer.secho(f"\n[error] {data.get('message')}", fg=typer.colors.RED, err=True)
                 else:
                     typer.echo(data["choices"][0]["delta"].get("content", ""), nl=False)
         typer.echo()
