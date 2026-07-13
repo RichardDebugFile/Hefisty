@@ -1,0 +1,35 @@
+name: hefisty
+
+# Redis (cache L1) + Qdrant (RAG, se usa desde Fase 3).
+# Ollama NO va aquí: corre nativo en el host (Windows) y se accede vía 127.0.0.1:11434.
+# Puertos atados a loopback: nada expuesto a la LAN por defecto.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: hefisty-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "no", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: hefisty-qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  qdrant_data:
