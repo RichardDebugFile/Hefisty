@@ -179,7 +179,7 @@ def knowledge_ingest(
     s, ollama, store = _knowledge()
     res = asyncio.run(ingest_path(s, ollama, store, coleccion, p, language=coleccion))
     typer.secho(
-        f"ingesta '{res.collection}': {res.files} archivos → {res.chunks} chunks",
+        f"ingesta '{res.collection}': {res.files} archivos -> {res.chunks} chunks",
         fg=typer.colors.GREEN,
     )
 
@@ -216,8 +216,8 @@ def index_cmd(ruta: str = typer.Argument(".", help="Ruta del repo a indexar.")) 
     s, ollama, store = _knowledge()
     res = asyncio.run(index_repo(s, ollama, store, Path(ruta)))
     typer.secho(
-        f"índice '{res.collection}': {res.scanned} archivos, {res.changed} cambiados "
-        f"→ {res.chunks} chunks",
+        f"indice '{res.collection}': {res.scanned} archivos, {res.changed} cambiados "
+        f"-> {res.chunks} chunks",
         fg=typer.colors.GREEN,
     )
 
