@@ -83,6 +83,18 @@ class OllamaClient:
                     if chunk.get("done"):
                         break
 
+    async def embed(self, model: str, inputs: list[str]) -> list[list[float]]:
+        """Embeddings de una lista de textos (`/api/embed`)."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                r = await client.post(
+                    f"{self._base}/api/embed", json={"model": model, "input": inputs}
+                )
+                r.raise_for_status()
+            except httpx.HTTPError as exc:  # pragma: no cover - red
+                raise OllamaError(f"embed falló: {exc}") from exc
+            return r.json().get("embeddings", [])
+
     async def list_models(self) -> list[str]:
         """Modelos instalados (`/api/tags`)."""
         async with httpx.AsyncClient(timeout=30.0) as client:

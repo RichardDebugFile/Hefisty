@@ -62,6 +62,16 @@ class Settings(BaseModel):
     cache_ttl_code: int = 600
     max_input_chars: int = 32000
 
+    # Conocimiento (RAG).
+    chunk_tokens: int = 512
+    chunk_overlap: int = 64
+    retrieval_k: int = 6
+    retrieval_score_min: float = 0.4
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return self.data_dir / "knowledge_sources"
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "sessions.db"
@@ -89,6 +99,10 @@ class Settings(BaseModel):
             cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
             cache_ttl_code=int(e("HEFISTY_CACHE_TTL_CODE", "600")),
             max_input_chars=int(e("HEFISTY_MAX_INPUT_CHARS", "32000")),
+            chunk_tokens=int(e("HEFISTY_CHUNK_TOKENS", "512")),
+            chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
+            retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
+            retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
         )
 
 
