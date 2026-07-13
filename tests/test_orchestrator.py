@@ -150,3 +150,75 @@ async def test_coder_turn_is_never_cached(tmp_path):
     await _collect(orch.stream_turn(s, "escribe una función en python"))
     assert sem.put_calls == []  # semántica: nunca para el Coder
     assert orch._cache.store == {}  # exacta: tampoco
+
+
+class ChainFakeOllama:
+    def __init__(self):
+        self.calls: list = []
+
+    async def chat(self, model, messages, *, keep_alive="10m", fmt=None, options=None):
+        return json.dumps({"action": "delegate", "agent": "coder"})
+
+    async def chat_stream(self, model, messages, *, keep_alive="10m", options=None):
+        system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        text = "hallazgo: usa nombres claros" if "Revisor" in system else "def f(): pass"
+        for word in text.split():
+            yield word + " "
+
+    async def unload(self, model):
+        pass
+
+    async def loaded_models(self):
+        return []
+
+
+def _build_chain(tmp_path):
+    settings = Settings()
+    ollama = ChainFakeOllama()
+    sessions = SessionStore(tmp_path / "s.db")
+    coder = Coder(ollama, load_role("coder"), settings.keep_alive)
+    revisor = Coder(ollama, load_role("revisor"), settings.keep_alive)
+    router = Router(ollama, {settings.model_frontal, settings.model_embed})
+    orch = Orchestrator(
+        settings,
+        ollama,
+        sessions,
+        FakeCache(),
+        coder,
+        router,
+        agents={"coder": coder, "revisor": revisor},
+    )
+    return orch, sessions
+
+
+async def test_chain_coder_then_revisor(tmp_path):
+    orch, sessions = _build_chain(tmp_path)
+    s = sessions.create()
+    agents_seen, parts = [], []
+    async for ev in orch.stream_turn(s, "escribe una función y revísala"):
+        (agents_seen if ev["type"] == "meta" else parts).append(
+            ev["agent"] if ev["type"] == "meta" else ev["text"]
+        )
+    assert agents_seen == ["coder", "revisor"]
+    reloaded = sessions.get(s.id)
+    assert [st["state"] for st in reloaded.subtasks] == ["hecha", "hecha"]
+    assert "hallazgo" in "".join(parts)  # hallazgos del revisor en la respuesta
+
+
+async def test_resume_continues_chain_from_pending(tmp_path):
+    orch, sessions = _build_chain(tmp_path)
+    s = sessions.create()
+    # Cadena a medias: coder hecha, revisor pendiente (simula muerte del proceso).
+    s.subtasks = [
+        {"agent": "coder", "input": "tarea original", "state": "hecha", "result": "def f(): pass"},
+        {"agent": "revisor", "input": "", "state": "pendiente", "result": ""},
+    ]
+    sessions.save(s)
+
+    agents_seen = []
+    async for ev in orch.resume_chain(sessions.get(s.id)):
+        if ev["type"] == "meta":
+            agents_seen.append(ev["agent"])
+    assert agents_seen == ["revisor"]  # retoma solo desde la subtarea pendiente
+    reloaded = sessions.get(s.id)
+    assert reloaded.subtasks[1]["state"] == "hecha"

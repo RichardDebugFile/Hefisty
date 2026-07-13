@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 
 from ..agents.coder import Coder
@@ -85,6 +86,7 @@ class Orchestrator:
         router: Router,
         retriever: Retriever | None = None,
         semantic: SemanticCache | None = None,
+        agents: dict[str, Coder] | None = None,
     ) -> None:
         self._s = settings
         self._ollama = ollama
@@ -94,7 +96,19 @@ class Orchestrator:
         self._router = router
         self._retriever = retriever
         self._semantic = semantic
+        # Registro de agentes para el encadenamiento. El Coder siempre está.
+        self._agents = agents or {"coder": coder}
         self._identity = load_identity()
+
+    def _plan_chain(self, user_text: str) -> list[str]:
+        """Cadena de agentes según la petición (opt-in por palabras clave)."""
+        low = user_text.lower()
+        chain = ["coder"]
+        if re.search(r"rev[ií]s|review", low) and "revisor" in self._agents:
+            chain.append("revisor")
+        if re.search(r"document|docstring|readme", low) and "docs" in self._agents:
+            chain.append("docs")
+        return chain
 
     async def decide(self, session: Session, user_text: str) -> str:
         messages: list[Message] = [
@@ -151,6 +165,11 @@ class Orchestrator:
         action = await self.decide(session, user_text)
         sources: list[dict] = []
         if action == "delegate":
+            chain = self._plan_chain(user_text)
+            if len(chain) > 1:
+                async for ev in self._stream_chain(session, user_text, chain):
+                    yield ev
+                return
             agent, model = "coder", self._coder.model
             await self._router.activate(model)
             hits, lang = await self._retrieve(user_text)
@@ -215,6 +234,95 @@ class Orchestrator:
             await self._cache.set(cache_msgs, _CACHE_NS, json.dumps(value), self._s.cache_ttl_chat)
             if self._semantic is not None:
                 await self._semantic.put(user_text, value)
+
+    async def _stream_chain(
+        self, session: Session, user_text: str, chain: list[str]
+    ) -> AsyncIterator[dict]:
+        session.subtasks = [
+            {"agent": a, "input": "", "state": "pendiente", "result": ""} for a in chain
+        ]
+        session.subtasks[0]["input"] = user_text
+        await asyncio.to_thread(self._sessions.save, session)
+        async for ev in self._run_chain_from(session, user_text, 0):
+            yield ev
+
+    async def resume_chain(self, session: Session) -> AsyncIterator[dict]:
+        """Continúa una cadena a medias desde la subtarea siguiente a la última completada."""
+        pending = [i for i, st in enumerate(session.subtasks) if st["state"] != "hecha"]
+        if not pending:
+            return
+        user_text = session.subtasks[0].get("input") or ""
+        async for ev in self._run_chain_from(session, user_text, pending[0]):
+            yield ev
+
+    async def _run_chain_from(
+        self, session: Session, user_text: str, start: int
+    ) -> AsyncIterator[dict]:
+        prev = session.subtasks[start - 1]["result"] if start > 0 else user_text
+        for i in range(start, len(session.subtasks)):
+            st = session.subtasks[i]
+            name = st["agent"]
+            agent_obj = self._agents.get(name)
+            if agent_obj is None:
+                st["state"] = "fallida"
+                await asyncio.to_thread(self._sessions.save, session)
+                continue
+            step_input = user_text if i == 0 else self._chain_prompt(name, user_text, prev)
+            st["input"] = step_input[:1000]
+            st["state"] = "en_curso"
+            await asyncio.to_thread(self._sessions.save, session)
+
+            msgs: list[Message] = [{"role": "user", "content": step_input}]
+            sources: list[dict] = []
+            if name == "coder":
+                hits, _lang = await self._retrieve(user_text)
+                if hits:
+                    msgs = [self._context_message(hits), *msgs]
+                    sources = [
+                        {"source": h.source, "section": h.section, "score": round(h.score, 3)}
+                        for h in hits
+                    ]
+            await self._router.activate(agent_obj.model)
+            yield {
+                "type": "meta",
+                "session_id": session.id,
+                "agent": name,
+                "model": agent_obj.model,
+                "cached": False,
+                "cache_key": "",
+                "sources": sources,
+                "chain": self._chain_state(session),
+            }
+            parts: list[str] = []
+            async for piece in agent_obj.stream(msgs):
+                piece, _n = redact_credentials(piece)
+                parts.append(piece)
+                yield {"type": "content", "text": piece}
+            st["result"] = "".join(parts)
+            st["state"] = "hecha"
+            await asyncio.to_thread(self._sessions.save, session)
+            prev = st["result"]
+
+        final = self._combine_chain(session.subtasks)
+        await self._persist(session, user_text, final, session.subtasks[-1]["agent"])
+
+    @staticmethod
+    def _chain_prompt(name: str, user_text: str, prev: str) -> str:
+        if name == "revisor":
+            return f"Revisa este resultado para la tarea «{user_text}»:\n\n{prev}"
+        if name == "docs":
+            return f"Documenta lo siguiente:\n\n{prev}"
+        return prev
+
+    @staticmethod
+    def _chain_state(session: Session) -> list[dict]:
+        return [{"agent": st["agent"], "state": st["state"]} for st in session.subtasks]
+
+    @staticmethod
+    def _combine_chain(subtasks: list[dict]) -> str:
+        return "\n\n".join(
+            f"### {st['agent']}\n{st['result']}" for st in subtasks if st.get("result")
+        )
 
     async def _retrieve(self, user_text: str) -> tuple[list[Hit], str | None]:
         if self._retriever is None:

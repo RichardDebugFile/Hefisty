@@ -60,6 +60,12 @@ def create_app(
     cache = cache or L1Cache(settings.redis_url)
     if orchestrator is None:
         coder = Coder(ollama, load_role("coder"), settings.keep_alive)
+        agents = {"coder": coder}
+        for role_name in ("revisor", "docs"):
+            try:
+                agents[role_name] = Coder(ollama, load_role(role_name), settings.keep_alive)
+            except FileNotFoundError:
+                pass
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
         knowledge = KnowledgeStore(settings.qdrant_url)
         orchestrator = Orchestrator(
@@ -71,6 +77,7 @@ def create_app(
             router,
             retriever=Retriever(settings, ollama, knowledge),
             semantic=SemanticCache(settings, ollama, knowledge),
+            agents=agents,
         )
     auth = make_auth_dep(settings.api_token)
 
@@ -189,7 +196,29 @@ def create_app(
             "title": s.title,
             "active_agent": s.active_agent,
             "messages": s.messages,
+            "subtasks": s.subtasks,
         }
+
+    @app.post("/v1/sessions/{session_id}/continue", dependencies=[Depends(auth)])
+    async def continue_chain(session_id: str):  # noqa: ANN202
+        session = await asyncio.to_thread(sessions.get, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+        async def event_gen() -> AsyncIterator[str]:
+            try:
+                async for ev in orchestrator.resume_chain(session):
+                    if ev["type"] == "meta":
+                        yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    else:
+                        chunk = {"choices": [{"delta": {"content": ev["text"]}}]}
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                err = {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
 
     @app.patch("/v1/sessions/{session_id}", dependencies=[Depends(auth)])
     async def rename(session_id: str, body: RenameRequest):  # noqa: ANN202
