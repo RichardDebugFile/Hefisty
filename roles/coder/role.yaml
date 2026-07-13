@@ -7,5 +7,5 @@ system_prompt: prompts/coder.md
 knowledge:
   collection: coder       # colección Qdrant; se puebla en Fase 3
   sources: []
-tools: [leer_archivo, escribir_archivo, listar_directorio]
+tools: [leer_archivo, escribir_archivo, listar_directorio, glob, grep, read_range, edit, search_code]
 lora: null

@@ -222,5 +222,48 @@ def index_cmd(ruta: str = typer.Argument(".", help="Ruta del repo a indexar.")) 
     )
 
 
+@app.command("code")
+def code_cmd(
+    tarea: str = typer.Argument(..., help="Tarea de código a resolver en el workspace."),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Muestra las llamadas a tools."),
+) -> None:
+    """El Coder resuelve una tarea con sus herramientas (glob/grep/read_range/edit/search_code)."""
+    from .agents.agentic import AgenticCoder
+    from .knowledge.repo_index import collection_name
+    from .knowledge.retrieval import Retriever
+    from .knowledge.store import KnowledgeStore
+    from .ollama_client import OllamaClient
+    from .roles import load_role
+
+    s = get_settings()
+    s.workspace_dir.mkdir(parents=True, exist_ok=True)
+    ollama = OllamaClient(s.ollama_url)
+    agent = AgenticCoder(
+        ollama,
+        load_role("coder"),
+        s.workspace_dir,
+        s,
+        retriever=Retriever(s, ollama, KnowledgeStore(s.qdrant_url)),
+        repo_collection=collection_name(s.workspace_dir),
+    )
+
+    def on_event(ev: str) -> None:
+        if verbose:
+            typer.secho(f"  · {ev}", fg=typer.colors.BLUE, err=True)
+
+    async def _go() -> dict:
+        try:
+            return await agent.run(tarea, on_event)
+        finally:
+            await ollama.aclose()
+
+    res = asyncio.run(_go())
+    typer.echo(res["answer"])
+    if res["touched"]:
+        typer.secho(
+            f"archivos tocados: {', '.join(res['touched'])}", fg=typer.colors.GREEN, err=True
+        )
+
+
 if __name__ == "__main__":
     app()
