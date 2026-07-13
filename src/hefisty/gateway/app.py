@@ -30,7 +30,7 @@ from ..orchestrator.sessions import SessionStore
 from ..protections import detect_injection
 from ..roles import load_role
 from .auth import make_auth_dep
-from .schemas import ChatRequest, RenameRequest
+from .schemas import ChatRequest, FeedbackRequest, RenameRequest
 
 logger = logging.getLogger("hefisty.gateway")
 
@@ -189,6 +189,25 @@ def create_app(
             raise HTTPException(status_code=404, detail="Sesión no encontrada")
         await asyncio.to_thread(sessions.rename, session_id, body.title)
         return {"id": session_id, "title": body.title}
+
+    @app.post("/v1/feedback", dependencies=[Depends(auth)])
+    async def feedback(body: FeedbackRequest):  # noqa: ANN202
+        fid = await asyncio.to_thread(
+            sessions.add_feedback,
+            session_id=body.session_id,
+            turn_index=body.turn_index,
+            agent=body.agent,
+            model=body.model,
+            vote=body.vote,
+            comment=body.comment or "",
+            cache_key=body.cache_key or "",
+            sources=body.sources or [],
+        )
+        invalidated = False
+        if body.vote == "down" and body.cache_key:
+            await cache.delete_key(body.cache_key)
+            invalidated = True
+        return {"id": fid, "invalidated_cache": invalidated}
 
     @app.get("/health")
     async def health():  # noqa: ANN202

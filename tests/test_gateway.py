@@ -27,8 +27,14 @@ class FakeOllama:
 
 
 class FakeCache:
+    def __init__(self):
+        self.deleted: list[str] = []
+
     async def ping(self):
         return True
+
+    async def delete_key(self, key):
+        self.deleted.append(key)
 
 
 class RaisingOrch:
@@ -121,6 +127,46 @@ def test_sessions_lifecycle(tmp_path):
     assert sessions.get(s.id).title == "otro"
 
     assert client.post("/v1/sessions/inexistente/resume").status_code == 404
+
+
+def _client_with_cache(tmp_path):
+    settings = Settings(data_dir=tmp_path)
+    sessions = SessionStore(tmp_path / "s.db")
+    cache = FakeCache()
+    app = create_app(
+        settings=settings,
+        ollama=FakeOllama(),
+        sessions=sessions,
+        cache=cache,
+        orchestrator=FakeOrch(),
+    )
+    return TestClient(app), sessions, cache
+
+
+def test_feedback_down_stored_and_invalidates_cache(tmp_path):
+    client, sessions, cache = _client_with_cache(tmp_path)
+    r = client.post(
+        "/v1/feedback",
+        json={
+            "vote": "down",
+            "session_id": "s1",
+            "agent": "coder",
+            "model": "m",
+            "cache_key": "hefisty:l1:xyz",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["invalidated_cache"] is True
+    assert "hefisty:l1:xyz" in cache.deleted
+    assert len(sessions.list_feedback("s1")) == 1
+
+
+def test_feedback_up_does_not_invalidate(tmp_path):
+    client, _, cache = _client_with_cache(tmp_path)
+    r = client.post("/v1/feedback", json={"vote": "up", "session_id": "s1", "cache_key": "k"})
+    assert r.status_code == 200
+    assert r.json()["invalidated_cache"] is False
+    assert cache.deleted == []
 
 
 def test_unknown_session_id_returns_404(tmp_path):

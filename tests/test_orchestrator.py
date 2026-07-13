@@ -36,6 +36,9 @@ class FakeCache:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
 
+    def key_for(self, messages, model):
+        return "k:" + json.dumps(messages, sort_keys=True)
+
     async def get(self, messages, model):
         return self.store.get(json.dumps(messages, sort_keys=True))
 

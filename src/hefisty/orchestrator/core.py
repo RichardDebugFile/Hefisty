@@ -127,6 +127,7 @@ class Orchestrator:
     async def stream_turn(self, session: Session, user_text: str) -> AsyncIterator[dict]:
         """Emite eventos {type: meta|content}. La primera es meta (agente/modelo)."""
         cache_msgs: list[Message] = [*session.messages, {"role": "user", "content": user_text}]
+        cache_key = self._cache.key_for(cache_msgs, _CACHE_NS)
 
         cached = await self._cache.get(cache_msgs, _CACHE_NS)
         if cached is not None:
@@ -137,6 +138,7 @@ class Orchestrator:
                 "agent": data["agent"],
                 "model": data["model"],
                 "cached": True,
+                "cache_key": cache_key,
                 "sources": data.get("sources", []),
             }
             yield {"type": "content", "text": data["content"]}
@@ -173,6 +175,7 @@ class Orchestrator:
             "agent": agent,
             "model": model,
             "cached": False,
+            "cache_key": cache_key,
             "sources": sources,
         }
         parts: list[str] = []

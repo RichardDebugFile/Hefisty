@@ -27,6 +27,19 @@ CREATE TABLE IF NOT EXISTS sessions (
     history      BLOB NOT NULL,   -- JSON gzip: lista de mensajes
     state        TEXT NOT NULL    -- JSON: {touched_files, subtasks}
 );
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    turn_index INTEGER,
+    agent      TEXT,
+    model      TEXT,
+    vote       TEXT NOT NULL,   -- 'up' | 'down'
+    comment    TEXT,
+    cache_key  TEXT,            -- clave L1 para invalidar en 'down'
+    sources    TEXT,            -- JSON: chunks RAG usados
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -150,3 +163,45 @@ class SessionStore:
     def delete(self, session_id: str) -> None:
         with self._connect() as con:
             con.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    def add_feedback(
+        self,
+        *,
+        session_id: str | None,
+        turn_index: int | None,
+        agent: str | None,
+        model: str | None,
+        vote: str,
+        comment: str = "",
+        cache_key: str = "",
+        sources: list | None = None,
+    ) -> int:
+        with self._connect() as con:
+            cur = con.execute(
+                "INSERT INTO feedback (session_id, turn_index, agent, model, vote, "
+                "comment, cache_key, sources, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    turn_index,
+                    agent,
+                    model,
+                    vote,
+                    comment,
+                    cache_key,
+                    json.dumps(sources or []),
+                    _now(),
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    def list_feedback(self, session_id: str | None = None) -> list[dict]:
+        query = "SELECT * FROM feedback"
+        args: tuple = ()
+        if session_id:
+            query += " WHERE session_id = ?"
+            args = (session_id,)
+        query += " ORDER BY id DESC"
+        with self._connect() as con:
+            rows = con.execute(query, args).fetchall()
+        return [dict(r) for r in rows]

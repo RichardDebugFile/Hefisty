@@ -41,3 +41,23 @@ def test_rename(tmp_path):
 def test_get_missing_returns_none(tmp_path):
     store = SessionStore(tmp_path / "s.db")
     assert store.get("noexiste") is None
+
+
+def test_feedback_roundtrip(tmp_path):
+    store = SessionStore(tmp_path / "s.db")
+    fid = store.add_feedback(
+        session_id="s1",
+        turn_index=0,
+        agent="coder",
+        model="m",
+        vote="down",
+        comment="incorrecto",
+        cache_key="hefisty:l1:abc",
+        sources=[{"source": "f.md"}],
+    )
+    assert fid >= 1
+    items = store.list_feedback("s1")
+    assert len(items) == 1
+    assert items[0]["vote"] == "down"
+    assert items[0]["cache_key"] == "hefisty:l1:abc"
+    assert store.list_feedback("otra") == []
