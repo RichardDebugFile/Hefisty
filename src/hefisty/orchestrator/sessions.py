@@ -146,3 +146,7 @@ class SessionStore:
                 "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
                 (title, _now(), session_id),
             )
+
+    def delete(self, session_id: str) -> None:
+        with self._connect() as con:
+            con.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
