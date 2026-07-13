@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -26,9 +27,13 @@ from ..ollama_client import OllamaClient
 from ..orchestrator.core import Orchestrator
 from ..orchestrator.router import Router
 from ..orchestrator.sessions import SessionStore
-from ..roles import load_role
+from ..protections import detect_injection
+from ..roles import list_roles, load_role
+from ..semantic_cache import SemanticCache
 from .auth import make_auth_dep
-from .schemas import ChatRequest, RenameRequest
+from .schemas import ChatRequest, FeedbackRequest, RenameRequest
+
+logger = logging.getLogger("hefisty.gateway")
 
 
 async def _qdrant_ok(url: str) -> bool:
@@ -55,10 +60,24 @@ def create_app(
     cache = cache or L1Cache(settings.redis_url)
     if orchestrator is None:
         coder = Coder(ollama, load_role("coder"), settings.keep_alive)
+        agents = {"coder": coder}
+        for role_name in ("revisor", "docs"):
+            try:
+                agents[role_name] = Coder(ollama, load_role(role_name), settings.keep_alive)
+            except FileNotFoundError:
+                pass
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
-        retriever = Retriever(settings, ollama, KnowledgeStore(settings.qdrant_url))
+        knowledge = KnowledgeStore(settings.qdrant_url)
         orchestrator = Orchestrator(
-            settings, ollama, sessions, cache, coder, router, retriever=retriever
+            settings,
+            ollama,
+            sessions,
+            cache,
+            coder,
+            router,
+            retriever=Retriever(settings, ollama, knowledge),
+            semantic=SemanticCache(settings, ollama, knowledge),
+            agents=agents,
         )
     auth = make_auth_dep(settings.api_token)
 
@@ -79,6 +98,9 @@ def create_app(
         text = users[-1].content
         if len(text) > settings.max_input_chars:
             raise HTTPException(status_code=413, detail="Entrada demasiado grande")
+        flags = detect_injection(text)
+        if flags:
+            logger.warning("entrada con posible prompt injection (%d patrones)", len(flags))
         return text
 
     @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
@@ -174,7 +196,29 @@ def create_app(
             "title": s.title,
             "active_agent": s.active_agent,
             "messages": s.messages,
+            "subtasks": s.subtasks,
         }
+
+    @app.post("/v1/sessions/{session_id}/continue", dependencies=[Depends(auth)])
+    async def continue_chain(session_id: str):  # noqa: ANN202
+        session = await asyncio.to_thread(sessions.get, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+        async def event_gen() -> AsyncIterator[str]:
+            try:
+                async for ev in orchestrator.resume_chain(session):
+                    if ev["type"] == "meta":
+                        yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    else:
+                        chunk = {"choices": [{"delta": {"content": ev["text"]}}]}
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                err = {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_gen(), media_type="text/event-stream")
 
     @app.patch("/v1/sessions/{session_id}", dependencies=[Depends(auth)])
     async def rename(session_id: str, body: RenameRequest):  # noqa: ANN202
@@ -182,6 +226,54 @@ def create_app(
             raise HTTPException(status_code=404, detail="Sesión no encontrada")
         await asyncio.to_thread(sessions.rename, session_id, body.title)
         return {"id": session_id, "title": body.title}
+
+    @app.post("/v1/feedback", dependencies=[Depends(auth)])
+    async def feedback(body: FeedbackRequest):  # noqa: ANN202
+        fid = await asyncio.to_thread(
+            sessions.add_feedback,
+            session_id=body.session_id,
+            turn_index=body.turn_index,
+            agent=body.agent,
+            model=body.model,
+            vote=body.vote,
+            comment=body.comment or "",
+            cache_key=body.cache_key or "",
+            sources=body.sources or [],
+        )
+        invalidated = False
+        if body.vote == "down" and body.cache_key:
+            await cache.delete_key(body.cache_key)
+            invalidated = True
+        return {"id": fid, "invalidated_cache": invalidated}
+
+    @app.get("/v1/models", dependencies=[Depends(auth)])
+    async def models_loaded():  # noqa: ANN202
+        running = await ollama.running()
+        return {
+            "models": [
+                {
+                    "name": m.get("name", ""),
+                    "vram_bytes": m.get("size_vram", 0),
+                    "vram": f"{m.get('size_vram', 0) / 1e9:.1f} GB",
+                }
+                for m in running
+            ]
+        }
+
+    @app.get("/v1/roles", dependencies=[Depends(auth)])
+    async def roles_installed():  # noqa: ANN202
+        return {
+            "roles": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "model": r.model,
+                    "collection": r.collection,
+                    "tools": r.tools,
+                }
+                for r in list_roles()
+            ]
+        }
 
     @app.get("/health")
     async def health():  # noqa: ANN202

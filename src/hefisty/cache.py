@@ -25,6 +25,16 @@ class L1Cache:
         digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()
         return f"hefisty:l1:{digest}"
 
+    def key_for(self, messages: list[Message], model: str) -> str:
+        """Clave (Redis) de una petición: la incluye el gateway en meta para invalidar."""
+        return self._key(messages, model)
+
+    async def delete_key(self, key: str) -> None:
+        try:
+            await self._r.delete(key)
+        except RedisError:
+            pass
+
     async def get(self, messages: list[Message], model: str) -> str | None:
         try:
             return await self._r.get(self._key(messages, model))

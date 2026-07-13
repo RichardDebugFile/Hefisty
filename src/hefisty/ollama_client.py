@@ -134,12 +134,16 @@ class OllamaClient:
 
     async def loaded_models(self) -> list[str]:
         """Modelos residentes en memoria ahora mismo (`/api/ps`)."""
+        return [m.get("name", "") for m in await self.running()]
+
+    async def running(self) -> list[dict]:
+        """Detalle de los modelos cargados (`/api/ps`): incluye `size_vram`."""
         try:
             r = await self._c().get(f"{self._base}/api/ps", timeout=30.0)
             r.raise_for_status()
         except httpx.HTTPError:
             return []
-        return [m["name"] for m in r.json().get("models", [])]
+        return r.json().get("models", [])
 
     async def unload(self, model: str) -> None:
         """Descarga un modelo de VRAM de inmediato (`keep_alive=0`)."""

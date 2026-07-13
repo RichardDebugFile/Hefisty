@@ -86,7 +86,7 @@ def sessions() -> None:
 
 @app.command()
 def resume(session_id: str = typer.Argument(..., help="ID de la sesión.")) -> None:
-    """Muestra el historial de una sesión."""
+    """Muestra una sesión; si tiene una cadena de agentes a medias, la continúa."""
     base, headers = _api()
     try:
         r = httpx.post(f"{base}/v1/sessions/{session_id}/resume", headers=headers, timeout=10)
@@ -97,6 +97,39 @@ def resume(session_id: str = typer.Argument(..., help="ID de la sesión.")) -> N
         typer.secho("Sesión no encontrada.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     data = r.json()
+    subtasks = data.get("subtasks", [])
+    if subtasks and any(st.get("state") != "hecha" for st in subtasks):
+        estado = " -> ".join(f"{st['agent']}:{st['state']}" for st in subtasks)
+        typer.secho(
+            f"# {data['title']} — cadena a medias ({estado}); continuando...",
+            fg=typer.colors.YELLOW,
+        )
+        try:
+            with httpx.stream(
+                "POST",
+                f"{base}/v1/sessions/{session_id}/continue",
+                headers=headers,
+                timeout=300,
+            ) as cr:
+                cr.raise_for_status()
+                for line in cr.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    d = json.loads(payload)
+                    if d.get("type") == "meta":
+                        typer.secho(f"[{d['agent']}]", fg=typer.colors.CYAN, err=True)
+                    elif d.get("type") == "error":
+                        typer.secho(f"[error] {d['message']}", fg=typer.colors.RED, err=True)
+                    else:
+                        typer.echo(d["choices"][0]["delta"].get("content", ""), nl=False)
+            typer.echo()
+        except httpx.HTTPError as exc:
+            typer.secho(f"Error continuando: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from exc
+        return
     typer.secho(f"# {data['title']}", fg=typer.colors.GREEN)
     for m in data["messages"]:
         who = "tú" if m["role"] == "user" else "hefisty"

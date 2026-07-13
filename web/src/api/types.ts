@@ -47,7 +47,16 @@ export interface Source {
   score: number;
 }
 
-// SSE meta event emitted first in a chat stream.
+// State of a single sub-task inside a chained (multi-agent) turn.
+export type ChainState = 'pendiente' | 'en_curso' | 'hecha' | 'fallida' | string;
+
+export interface ChainStep {
+  agent: string;
+  state: ChainState;
+}
+
+// SSE meta event emitted before each agent's content in a chat stream.
+// A chained turn emits several meta events (one per agent in the chain).
 export interface MetaEvent {
   type: 'meta';
   session_id: string;
@@ -57,6 +66,63 @@ export interface MetaEvent {
   cached?: boolean;
   // RAG fragments that grounded the answer.
   sources?: Source[];
+  // Cache key for this response — echoed back when sending feedback.
+  cache_key?: string;
+  // Present on chained turns: the ordered sub-tasks and their state.
+  chain?: ChainStep[];
+}
+
+// ---------------------------------------------------------------------------
+// Live state: models loaded in VRAM (GET /v1/models)
+// ---------------------------------------------------------------------------
+
+export interface ModelInfo {
+  name: string;
+  // Human-readable VRAM footprint, e.g. "9.7 GB".
+  vram: string;
+  vram_bytes: number;
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+}
+
+// ---------------------------------------------------------------------------
+// Installed roles (GET /v1/roles) — read-only in this phase
+// ---------------------------------------------------------------------------
+
+export interface RoleInfo {
+  name: string;
+  description: string;
+  model: string;
+  collection: string;
+  tools: string[];
+}
+
+export interface RolesResponse {
+  roles: RoleInfo[];
+}
+
+// ---------------------------------------------------------------------------
+// Feedback (POST /v1/feedback)
+// ---------------------------------------------------------------------------
+
+export type FeedbackVote = 'up' | 'down';
+
+export interface FeedbackBody {
+  vote: FeedbackVote;
+  session_id: string;
+  turn_index: number;
+  agent?: string;
+  model?: string;
+  cache_key?: string;
+  comment?: string;
+  sources?: Source[];
+}
+
+export interface FeedbackResponse {
+  id: number;
+  invalidated_cache: boolean;
 }
 
 // OpenAI-style streamed chunk.

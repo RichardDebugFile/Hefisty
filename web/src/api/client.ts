@@ -5,12 +5,17 @@
 // token in local dev, so when unset we simply omit the header.
 
 import type {
+  ChainStep,
   ChatChunk,
   ChatMessage,
+  FeedbackBody,
+  FeedbackResponse,
   HealthResponse,
   MetaEvent,
+  ModelsResponse,
   RenameResponse,
   ResumeResponse,
+  RolesResponse,
   SessionsResponse,
   Source,
 } from './types';
@@ -91,6 +96,29 @@ export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// Live state: models loaded in VRAM & installed roles
+// ---------------------------------------------------------------------------
+
+export function listModels(signal?: AbortSignal): Promise<ModelsResponse> {
+  return jsonFetch<ModelsResponse>('/v1/models', { signal });
+}
+
+export function listRoles(signal?: AbortSignal): Promise<RolesResponse> {
+  return jsonFetch<RolesResponse>('/v1/roles', { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+export function sendFeedback(body: FeedbackBody): Promise<FeedbackResponse> {
+  return jsonFetch<FeedbackResponse>('/v1/feedback', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Chat completions (SSE stream)
 // ---------------------------------------------------------------------------
 
@@ -155,11 +183,14 @@ export async function streamChat(
     if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'meta') {
       const raw = parsed as MetaEvent;
       // Normalize the extra fields so downstream state can trust their shape:
-      // `cached` is a strict boolean and `sources` is an array (or undefined).
+      // `cached` is a strict boolean, `sources`/`chain` are arrays (or
+      // undefined) and `cache_key` is a string (or undefined).
       const meta: MetaEvent = {
         ...raw,
         cached: raw.cached === true,
         sources: Array.isArray(raw.sources) ? (raw.sources as Source[]) : undefined,
+        chain: Array.isArray(raw.chain) ? (raw.chain as ChainStep[]) : undefined,
+        cache_key: typeof raw.cache_key === 'string' ? raw.cache_key : undefined,
       };
       callbacks.onMeta?.(meta);
       return;

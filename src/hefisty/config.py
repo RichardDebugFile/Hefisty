@@ -67,6 +67,10 @@ class Settings(BaseModel):
     chunk_overlap: int = 64
     retrieval_k: int = 6
     retrieval_score_min: float = 0.4
+    # Umbral de similitud para la cache semántica. 0.80 calibrado para nomic-embed-text
+    # (parafraseos ~0.84, no-relacionados ~0.69); el 0.95 del diseño es irreal para este
+    # modelo. Configurable con HEFISTY_SEMANTIC_THRESHOLD.
+    semantic_threshold: float = 0.80
 
     @property
     def knowledge_dir(self) -> Path:
@@ -103,6 +107,7 @@ class Settings(BaseModel):
             chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
             retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
             retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
+            semantic_threshold=float(e("HEFISTY_SEMANTIC_THRESHOLD", "0.80")),
         )
 
 

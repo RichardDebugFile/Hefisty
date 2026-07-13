@@ -19,3 +19,14 @@ class ChatRequest(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str
+
+
+class FeedbackRequest(BaseModel):
+    vote: str  # "up" | "down"
+    session_id: str | None = None
+    turn_index: int | None = None
+    agent: str | None = None
+    model: str | None = None
+    comment: str | None = None
+    cache_key: str | None = None
+    sources: list | None = None
