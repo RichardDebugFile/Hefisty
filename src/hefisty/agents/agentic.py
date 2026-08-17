@@ -8,6 +8,7 @@ edición registra el archivo tocado. Bucle acotado a `max_rounds`.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -15,9 +16,13 @@ from typing import Any
 
 from ..config import Settings
 from ..knowledge.retrieval import Retriever
+from ..lang import detect_language
 from ..ollama_client import OllamaClient
+from ..protections import sanitize_chunk
 from ..roles import Role
 from . import tools
+
+logger = logging.getLogger("hefisty.agentic")
 
 
 def _fn(name: str, desc: str, props: dict, required: list[str]) -> dict:
@@ -156,9 +161,42 @@ class AgenticCoder:
             return f"ERROR: {exc}"
         return f"(herramienta desconocida: {name})"
 
+    async def _dict_context(self, task: str) -> list[dict[str, Any]]:
+        """Inyecta chunks de los diccionarios (`[lenguaje, patrones]`) como contexto de
+        sistema, igual que el path de streaming del orquestador. Sin esto, el Coder que
+        EDITA no ve los diccionarios (solo tendría `search_code` del índice del repo)."""
+        if self._retriever is None:
+            return []
+        lang = detect_language(task)
+        collections = [c for c in [lang, "patrones"] if c]
+        if not collections:
+            return []
+        try:
+            hits = await self._retriever.retrieve(task, collections)
+        except Exception as exc:  # Qdrant caído no debe romper la tarea
+            logger.warning("retrieval de diccionario falló: %s", exc)
+            return []
+        if not hits:
+            return []
+        parts = []
+        for h in hits:
+            safe, _degraded = sanitize_chunk(h.text)
+            parts.append(f"[{h.source}] ({h.section})\n{safe}")
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Contexto recuperado del diccionario. Úsalo si es relevante y CITA la "
+                    "fuente entre corchetes, p. ej. [archivo.md]. Si no aporta, ignóralo.\n\n"
+                    + "\n\n".join(parts)
+                ),
+            }
+        ]
+
     async def run(self, task: str, on_event: Callable[[str], None] | None = None) -> dict[str, Any]:
         convo: list[dict[str, Any]] = [
             {"role": "system", "content": self._role.system_prompt + _TOOL_GUIDANCE},
+            *await self._dict_context(task),
             {"role": "user", "content": task},
         ]
         steps = 0

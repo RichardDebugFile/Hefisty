@@ -7,6 +7,7 @@ embeddings, y gestión de modelos (listar/cargados/descargar). Reutiliza un úni
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,6 +15,12 @@ from typing import Any
 import httpx
 
 Message = dict[str, str]
+
+# Reintentos ante 500 transitorios de Ollama (gpt-oss ocasionalmente devuelve 500 con
+# tools/contexto y se recupera al reintentar; era el modo de fallo de las tareas Java del
+# benchmark). Backoff corto exponencial.
+_MAX_TRIES = 3
+_BACKOFF_BASE = 0.5
 
 
 class OllamaError(RuntimeError):
@@ -36,6 +43,25 @@ class OllamaClient:
             await self._client.aclose()
             self._client = None
 
+    async def _post_chat(self, payload: dict[str, Any], label: str) -> dict[str, Any]:
+        """POST a /api/chat con reintentos ante 500 transitorios. Devuelve el JSON."""
+        delay = _BACKOFF_BASE
+        for attempt in range(_MAX_TRIES):
+            try:
+                r = await self._c().post(f"{self._base}/api/chat", json=payload)
+                r.raise_for_status()
+                return r.json()
+            except httpx.HTTPStatusError as exc:
+                retryable = exc.response is not None and exc.response.status_code >= 500
+                if retryable and attempt < _MAX_TRIES - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                raise OllamaError(f"{label} falló: {exc}") from exc
+            except httpx.HTTPError as exc:  # pragma: no cover - red
+                raise OllamaError(f"{label} falló: {exc}") from exc
+        raise OllamaError(f"{label} falló: sin respuesta tras {_MAX_TRIES} intentos")
+
     async def chat(
         self,
         model: str,
@@ -56,12 +82,8 @@ class OllamaClient:
             payload["format"] = fmt
         if options:
             payload["options"] = options
-        try:
-            r = await self._c().post(f"{self._base}/api/chat", json=payload)
-            r.raise_for_status()
-        except httpx.HTTPError as exc:  # pragma: no cover - red
-            raise OllamaError(f"chat falló: {exc}") from exc
-        return r.json().get("message", {}).get("content", "")
+        data = await self._post_chat(payload, "chat")
+        return data.get("message", {}).get("content", "")
 
     async def chat_tools(
         self,
@@ -79,12 +101,8 @@ class OllamaClient:
             "keep_alive": keep_alive,
             "tools": tools,
         }
-        try:
-            r = await self._c().post(f"{self._base}/api/chat", json=payload)
-            r.raise_for_status()
-        except httpx.HTTPError as exc:  # pragma: no cover - red
-            raise OllamaError(f"chat_tools falló: {exc}") from exc
-        return r.json().get("message", {})
+        data = await self._post_chat(payload, "chat_tools")
+        return data.get("message", {})
 
     async def chat_stream(
         self,

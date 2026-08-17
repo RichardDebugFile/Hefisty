@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from hefisty.agents.agentic import AgenticCoder
 from hefisty.config import Settings
@@ -88,3 +89,54 @@ async def test_agentic_parses_text_tool_call(tmp_path):
     res = await agent.run("lista los .py", events.append)
     assert res["steps"] == 1  # el glob se ejecutó vía fallback de texto
     assert events and "app.py" in events[0]
+
+
+class FakeRetriever:
+    def __init__(self, hits):
+        self._hits = hits
+        self.collections = None
+
+    async def retrieve(self, query, collections):
+        self.collections = collections
+        return self._hits
+
+
+class CapturingOllama:
+    """Registra los mensajes de la primera llamada para inspeccionar el contexto inyectado."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.calls = 0
+        self.first_messages = None
+
+    async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
+        if self.calls == 0:
+            self.first_messages = [dict(m) for m in messages]
+        msg = self._script[self.calls]
+        self.calls += 1
+        return msg
+
+
+async def test_agentic_injects_dictionary_context(tmp_path):
+    # El Coder que EDITA debe recibir los chunks del diccionario como contexto de sistema.
+    hit = SimpleNamespace(
+        source="react-a11y.md",
+        section="useId",
+        text="Para identificadores únicos por instancia en React usa useId().",
+        score=0.9,
+    )
+    retriever = FakeRetriever([hit])
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings(), retriever=retriever)
+    await agent.run("arregla el formulario accesible en React con ARIA")
+    system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
+    assert any("useId" in t and "react-a11y.md" in t for t in system_texts)
+    assert retriever.collections == ["patrones"]  # sin lenguaje detectado → solo el comodín
+
+
+async def test_agentic_without_retriever_has_no_dictionary_context(tmp_path):
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())  # retriever=None
+    await agent.run("cualquier tarea")
+    system_msgs = [m for m in ollama.first_messages if m["role"] == "system"]
+    assert len(system_msgs) == 1  # solo el system prompt del rol, sin contexto de diccionario
