@@ -137,6 +137,32 @@ async def test_agentic_injects_dictionary_context(tmp_path):
 async def test_agentic_without_retriever_has_no_dictionary_context(tmp_path):
     ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
     agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())  # retriever=None
-    await agent.run("cualquier tarea")
+    await agent.run("cualquier tarea")  # workspace vacío -> tampoco árbol
     system_msgs = [m for m in ollama.first_messages if m["role"] == "system"]
-    assert len(system_msgs) == 1  # solo el system prompt del rol, sin contexto de diccionario
+    assert len(system_msgs) == 1  # solo el system prompt del rol, sin diccionario ni árbol
+
+
+async def test_agentic_tolerates_malformed_tool_args(tmp_path):
+    # El modelo emite un `edit` sin `texto_nuevo`: no debe romper el bucle, sino devolver
+    # un error de herramienta y seguir.
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    script = [
+        {"content": "", "tool_calls": [_tc("edit", {"ruta": "a.py", "texto_viejo": "x = 1"})]},
+        {"content": "corregido", "tool_calls": []},
+    ]
+    agent = AgenticCoder(ScriptedOllama(script), load_role("coder"), tmp_path, Settings())
+    res = await agent.run("edita a.py", None)  # no debe lanzar
+    assert res["steps"] == 1
+    assert res["answer"] == "corregido"
+
+
+async def test_agentic_injects_workspace_tree(tmp_path):
+    # Archivos anidados: el Coder debe recibir el árbol y no navegar carpeta por carpeta.
+    nested = tmp_path / "src" / "com" / "forja" / "pedidos"
+    nested.mkdir(parents=True)
+    (nested / "Servicio.java").write_text("class X {}", encoding="utf-8")
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run("arregla el servicio")
+    system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
+    assert any("src/com/forja/pedidos/Servicio.java" in t for t in system_texts)

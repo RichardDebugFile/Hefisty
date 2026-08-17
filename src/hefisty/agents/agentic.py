@@ -89,6 +89,12 @@ _TOOL_GUIDANCE = (
 
 _TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
+# Árbol de archivos que se inyecta al inicio para que el Coder no navegue carpeta por
+# carpeta (modelos como gpt-oss se rinden en árboles profundos, p. ej. src/com/x/y/ en Java).
+_MAX_TREE = 200
+_TREE_SKIP = {"node_modules", ".git", "target", "build", "dist", ".venv", "__pycache__",
+              ".idea", ".gradle", ".next", "coverage"}
+
 
 def _extract_text_toolcall(content: str) -> dict | None:
     """Fallback: algunos modelos (o versiones viejas de Ollama) emiten la llamada como
@@ -159,6 +165,10 @@ class AgenticCoder:
                 )
         except tools.ToolError as exc:
             return f"ERROR: {exc}"
+        except (KeyError, TypeError, ValueError) as exc:
+            # Tool call malformada (falta un argumento, tipo inválido): devuélvelo como
+            # error para que el modelo se corrija, en vez de romper todo el bucle.
+            return f"ERROR: argumento faltante o inválido: {exc}"
         return f"(herramienta desconocida: {name})"
 
     async def _dict_context(self, task: str) -> list[dict[str, Any]]:
@@ -193,12 +203,40 @@ class AgenticCoder:
             }
         ]
 
+    def _workspace_tree(self) -> str:
+        """Listado (acotado) de archivos del workspace para el contexto inicial. Evita que
+        el Coder navegue carpeta por carpeta y se rinda en árboles profundos."""
+        try:
+            files = tools.glob(self._ws, "**/*")
+        except tools.ToolError:
+            return ""
+        files = [f for f in files if not (set(f.split("/")) & _TREE_SKIP)]
+        if not files:
+            return ""
+        shown = files[:_MAX_TREE]
+        listing = "\n".join(shown)
+        extra = len(files) - len(shown)
+        if extra > 0:
+            listing += f"\n… (+{extra} archivos; usa glob/grep para el resto)"
+        return listing
+
     async def run(self, task: str, on_event: Callable[[str], None] | None = None) -> dict[str, Any]:
         convo: list[dict[str, Any]] = [
             {"role": "system", "content": self._role.system_prompt + _TOOL_GUIDANCE},
             *await self._dict_context(task),
-            {"role": "user", "content": task},
         ]
+        tree = self._workspace_tree()
+        if tree:
+            convo.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Archivos del workspace (usa estas rutas directamente; NO navegues "
+                        "carpeta por carpeta):\n" + tree
+                    ),
+                }
+            )
+        convo.append({"role": "user", "content": task})
         steps = 0
         for _ in range(self._max_rounds):
             msg = await self._ollama.chat_tools(
