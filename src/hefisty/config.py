@@ -49,7 +49,7 @@ class Settings(BaseModel):
 
     # Modelos.
     model_frontal: str = "qwen3:1.7b"
-    model_coder: str = "qwen2.5-coder:14b"
+    model_coder: str = "gpt-oss:20b"
     model_embed: str = "nomic-embed-text"
     keep_alive: str = "10m"
 
@@ -95,7 +95,7 @@ class Settings(BaseModel):
             redis_url=e("HEFISTY_REDIS_URL", "redis://127.0.0.1:6379/0"),
             qdrant_url=e("HEFISTY_QDRANT_URL", "http://127.0.0.1:6333"),
             model_frontal=e("HEFISTY_MODEL_FRONTAL", "qwen3:1.7b"),
-            model_coder=e("HEFISTY_MODEL_CODER", "qwen2.5-coder:14b"),
+            model_coder=e("HEFISTY_MODEL_CODER", "gpt-oss:20b"),
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),

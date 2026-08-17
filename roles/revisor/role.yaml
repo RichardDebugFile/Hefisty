@@ -2,7 +2,7 @@
 name: revisor
 description: "Revisor de código: analiza cambios y devuelve hallazgos (severidad, línea, sugerencia)."
 triggers: ["revisa", "review", "revisión", "audita", "corrige", "mejora"]
-model: qwen2.5-coder:14b
+model: gpt-oss:20b
 system_prompt: prompts/revisor.md
 knowledge:
   collection: patrones      # colección transversal (GoF, SOLID); se puebla en fases de contenido

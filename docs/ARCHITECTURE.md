@@ -20,7 +20,7 @@ flowchart TB
     subgraph OR[3. Orquestador]
         CL[Hefisty conversacional\nresponde o delega, 1-3B]
         RT[Router de agentes]
-        MEM[Sesiones persistentes]
+        MEM[Memoria: sesiones\n+ recuerdos L/P]
     end
 
     OR --> AG
@@ -71,7 +71,7 @@ Un agente = **paquete de rol** declarativo (ver [ROLES.md](ROLES.md)): manifiest
 
 Un solo agente de código para todo se satura: contexto mezclado, convenciones cruzadas entre lenguajes. La solución NO es un modelo completo por lenguaje (con 16 GB de VRAM el intercambio constante de modelos de 9 GB destruiría la latencia), sino un **Coder principal + sub-roles por lenguaje sobre el mismo modelo base**:
 
-- El Coder principal (Qwen2.5-Coder 14B) planifica, descompone y delega.
+- El Coder principal (gpt-oss:20b, MoE ~3.6B activos) planifica, descompone y delega. Elegido por su robustez en function-calling nativo (100% de tool_calls nativas en el bucle agéntico) y su velocidad (~60 tok/s en 16 GB), donde modelos densos como Qwen2.5-Coder 14B fallaban (0% nativas, dependían del parser de rescate).
 - Cada lenguaje (Python, JS/TS, C#, etc.) es un sub-rol: **adaptador LoRA opcional + diccionario RAG propio** (docs del lenguaje, convenciones, snippets) + prompt especializado. Los adaptadores pesan MBs y se aplican sin recargar el modelo — especialización real con costo de intercambio casi nulo.
 - El Coder principal detecta el lenguaje (por extensión de archivo o contenido) y activa el sub-rol antes de trabajar.
 
@@ -97,14 +97,37 @@ Qdrant con una colección por rol. El "diccionario de cómo programar" es la col
 | Función | Modelo | VRAM aprox (Q4) |
 |---|---|---|
 | Clasificador/router | Qwen3 1.7B | ~1.5 GB |
-| Coder (principal) | Qwen2.5-Coder 14B o Qwen3-Coder | ~9-10 GB |
-| Revisor/Tests | mismo Coder con prompt distinto (0 extra) o 7B | 0 / ~5 GB |
+| Coder (principal) | gpt-oss:20b (MoE, ~3.6B activos) | ~13 GB |
+| Revisor/Docs | mismo modelo con prompt distinto (0 extra) | 0 |
 | Embeddings | nomic-embed-text | ~0.5 GB |
 | Roles nuevos | 7B genérico (Qwen3 8B) + RAG del rol | ~5 GB |
 | Sub-roles de lenguaje | LoRA sobre el Coder base | ~0 (MBs) |
 | Visión (fase posterior) | Qwen2.5-VL 7B, carga bajo demanda | ~5 GB |
 
 Regla: clasificador + embeddings siempre residentes; el resto se intercambia. Nunca más de un modelo grande cargado.
+
+### 7. Aprendizaje por feedback (recompensa/castigo)
+
+El ciclo que permite que Hefisty y sus agentes mejoren con el uso. Tres capas:
+
+- **Captura.** Explícita: botones 👍/👎 en cada respuesta del front (con comentario opcional) y comando `hefisty feedback`. Implícita: señales detectadas por el frontal — el usuario pide rehacer algo ("no me gustó", "está mal") = castigo; acepta y continúa sobre el resultado = recompensa débil. Cada señal se guarda ligada a su contexto completo: sesión, turno, agente, rol, modelo, prompt usado y chunks RAG recuperados.
+- **Reacción inmediata.** Un 👎 invalida la entrada de cache de esa respuesta y ofrece reintento con ajuste; los chunks RAG que participaron en respuestas castigadas pierden peso en el ranking de retrieval (y lo ganan con 👍) — el "diccionario" aprende qué páginas suyas sirven.
+- **Aprendizaje diferido (fase 5).** El feedback acumulado se convierte en datasets por rol: pares con 👍 → ejemplos positivos para LoRA; pares 👎+corrección → pares de preferencia (respuesta mala vs corregida) para DPO local. Con suficiente volumen, cada rol se reentrena periódicamente con lo que a SU usuario le gusta — personalización real sin datos externos.
+
+Almacenamiento: tabla `feedback` en SQLite junto a las sesiones; exportable a JSONL formato `{"u", "a", "score"}` para entrenamiento.
+
+### 8. Memoria de corto y largo plazo
+
+Lo que hace que Hefisty "conozca" a su usuario más allá de la sesión actual:
+
+- **Corto plazo (ya existe):** la sesión activa — historial comprimido, subtareas, archivos tocados. Vive en SQLite, cacheada en Redis.
+- **Largo plazo (recuerdos):** hechos y preferencias persistentes entre sesiones — cómo se llama el usuario, en qué proyectos trabaja, su estilo de código preferido, manías y correcciones recurrentes.
+  - **Escritura (consolidación):** al cerrar sesión (o cada N turnos), el modelo frontal repasa la conversación y extrae recuerdos nuevos o actualizados como hechos atómicos ("prefiere inyección por constructor", "su app principal es X en Kotlin"). Nada se memoriza en caliente sin pasar por este filtro — evita basura.
+  - **Almacén:** tabla `memories` en SQLite (hecho, categoría, fecha, origen, fijado sí/no) + embedding en colección Qdrant `memoria` para búsqueda semántica.
+  - **Lectura:** en cada turno, el frontal recupera los top-k recuerdos relevantes a lo que se habla y los incluye en su contexto — Hefisty se acuerda sin que se lo pidan.
+  - **Transparencia y control:** `hefisty memory list / forget <id> / add "..."` y panel en el front. Los recuerdos son del usuario: visibles, editables, borrables.
+  - **Olvido natural:** decaimiento por antigüedad y desuso (los recuerdos no usados pierden peso hasta archivarse), salvo los fijados. Una memoria que solo crece termina recordando ruido.
+- **Privacidad:** todo en `data/` (gitignorado); los recuerdos jamás salen de la máquina ni entran a datasets de entrenamiento sin revisión explícita del usuario.
 
 ## Flujo de una petición
 
