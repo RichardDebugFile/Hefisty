@@ -52,6 +52,11 @@ class Settings(BaseModel):
     model_coder: str = "gpt-oss:20b"
     model_embed: str = "nomic-embed-text"
     keep_alive: str = "10m"
+    # Descargar el modelo grande (Coder) de VRAM al terminar el turno/cadena, en vez de
+    # dejarlo residente `keep_alive` minutos ocupando ~13 GB sin trabajar. Con presupuesto
+    # de VRAM ajustado (15.46/16) conviene True; recarga en 1-3 s desde el page cache de RAM
+    # (48 GB). Configurable con HEFISTY_UNLOAD_CODER (0 lo mantiene residente).
+    unload_coder_after_turn: bool = True
 
     # Directorios locales.
     workspace_dir: Path = REPO_ROOT / "workspace"
@@ -98,6 +103,8 @@ class Settings(BaseModel):
             model_coder=e("HEFISTY_MODEL_CODER", "gpt-oss:20b"),
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
+            unload_coder_after_turn=e("HEFISTY_UNLOAD_CODER", "1").lower()
+            not in ("0", "false", "no", "off"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
             data_dir=Path(e("HEFISTY_DATA_DIR", str(REPO_ROOT / "data"))),
             cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
