@@ -32,6 +32,10 @@ node_modules/
 # Material de gestión interna — no se publica (solo /prompts raíz, no roles/*/prompts)
 /prompts/
 
+# Dataset de identidad de Hefisty — COMPLETO privado (se publica solo la IA entrenada,
+# nunca el material de entrenamiento). Respaldar fuera de GitHub.
+roles/hefisty/dataset/
+
 # SO / IDE
 .DS_Store
 Thumbs.db

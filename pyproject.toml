@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Sistema de IAs locales orquestadas: Hefisty conversa, clasifica y delega en agentes especializados"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [{ name = "Richard Hidalgo", email = "123910016+RichardDebugFile@users.noreply.github.com" }]
+authors = [{ name = "Richard404", email = "123910016+Richard404@users.noreply.github.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

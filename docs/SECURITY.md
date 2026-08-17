@@ -10,7 +10,7 @@ Política de publicación (implementada en `.gitignore` desde el commit 1):
 | Documentación (`docs/`) | Modelos y pesos (`.gguf`, `.safetensors` — se descargan) |
 | Manifiestos de roles (`role.yaml`, prompts) | Datos de usuario: sesiones, historial, logs |
 | Secretos cifrados (`*.enc.*`) y `.sops.yaml` | Colecciones Qdrant (los "diccionarios" indexados) |
-| Adaptadores LoRA genéricos (identidad, lenguajes) | Datasets de correcciones (contienen código/datos del usuario) |
+| Adaptadores LoRA ya entrenados (identidad, lenguajes) | Datasets de entrenamiento — TODOS: correcciones del usuario y el dataset de identidad de Hefisty (`roles/hefisty/dataset/`). Se publica la IA entrenada, nunca su material fuente |
 | CI, Docker Compose, instalador | Cualquier ruta o dato personal de la máquina |
 
 Regla editorial: la documentación pública describe el sistema tal como es, sin referencias a material de trabajo interno (bocetos, conversaciones de diseño, decisiones personales) que el lector no tiene.

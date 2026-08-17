@@ -20,18 +20,25 @@ Cerrar este diseño, elegir nombre, crear repo en GitHub con estos docs, CI bás
 - Front: panel de agentes en vivo (quién trabaja, VRAM usada) y gestión de roles desde la UI.
 - Cache semántica. Protecciones entrada/salida completas.
 
-## Fase 4 — Roles dinámicos
+## Fase 4 — Roles dinámicos y memoria
+- Memoria de largo plazo: consolidación de recuerdos, colección `memoria`, recuperación por turno, comandos de gestión y panel (ver ARCHITECTURE §8).
 - Paquetes de rol declarativos + comando de creación de rol.
 - Flujo "no tengo ese rol → crearlo": esqueleto, ingesta de fuentes, alta en el clasificador.
 - Dataset de correcciones por rol.
 
 ## Fase 5 — Especialización y distribución
-- Entrenamiento QLoRA local de adaptadores por rol (Unsloth).
+- Entrenamiento QLoRA local de adaptadores por rol (Unsloth), alimentado por el feedback acumulado (👍 → ejemplos; 👎+corrección → pares de preferencia para DPO).
+- Ponderación de chunks RAG por feedback (los diccionarios aprenden qué páginas suyas sirven).
 - LoRA de identidad para el clasificador (Hefisty consistente sin prompt largo).
 - Sub-roles por lenguaje: adaptadores LoRA + diccionarios por lenguaje sobre el Coder base.
 - Modelo de visión (Qwen2.5-VL 7B) para pistas visuales: captura → descripción → búsqueda en el repo.
 - Instalador con detección de tier de hardware y perfiles automáticos.
 - Imágenes publicadas en GHCR; pruebas en Windows nativo + Docker; luego Linux/macOS.
+
+## ToDo futuro (sin fase asignada)
+- Voz: TTS/STT para que Hefisty hable y escuche (reutilizar experiencia previa en pipelines de audio).
+- Avatar/overlay de escritorio.
+- Herramientas de sistema (abrir apps, controlar navegador) como rol adicional.
 
 ## Fase 6 — Escala local
 - Backend vLLM opcional (tier ultimate, multi-usuario en LAN).
