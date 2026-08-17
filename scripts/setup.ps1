@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$models = @("qwen3:1.7b", "qwen2.5-coder:14b", "nomic-embed-text")
+$models = @("qwen3:1.7b", "gpt-oss:20b", "nomic-embed-text")
 
 Write-Host "== Hefisty setup ==" -ForegroundColor Cyan
 

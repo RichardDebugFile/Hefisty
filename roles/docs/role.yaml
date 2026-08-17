@@ -2,7 +2,7 @@
 name: docs
 description: "Documentador: genera y actualiza docstrings, comentarios y README de lo tocado."
 triggers: ["documenta", "docstring", "readme", "explica", "comenta"]
-model: qwen2.5-coder:14b
+model: gpt-oss:20b
 system_prompt: prompts/docs.md
 knowledge:
   collection: docs
