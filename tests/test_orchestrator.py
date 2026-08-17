@@ -88,6 +88,22 @@ async def test_delegate_routes_to_coder(tmp_path):
     assert text.strip()
 
 
+async def test_delegate_unloads_coder_after_turn(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "delegate")
+    s = sessions.create()
+    await _collect(orch.stream_turn(s, "escribe una función en python"))
+    # El Coder se descarga de VRAM al terminar (no queda residente ocioso).
+    assert ("unload", settings.model_coder) in ollama.calls
+
+
+async def test_reply_does_not_unload_any_model(tmp_path):
+    orch, sessions, ollama, settings = _build(tmp_path, "reply")
+    s = sessions.create()
+    await _collect(orch.stream_turn(s, "hola"))
+    # Charla: nunca se cargó ni se descarga un modelo grande.
+    assert not any(c[0] == "unload" for c in ollama.calls)
+
+
 async def test_persists_turn_and_autotitle(tmp_path):
     orch, sessions, ollama, settings = _build(tmp_path, "reply")
     s = sessions.create()

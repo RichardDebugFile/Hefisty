@@ -231,6 +231,9 @@ class Orchestrator:
             await self._cache.set(cache_msgs, _CACHE_NS, json.dumps(value), self._s.cache_ttl_chat)
             if semantic_ok:
                 await self._semantic.put(user_text, value)
+        # Delegación terminada: libera la VRAM del Coder en vez de dejarlo residente ocioso.
+        if action == "delegate" and self._s.unload_coder_after_turn:
+            await self._router.release()
 
     async def _stream_chain(
         self, session: Session, user_text: str, chain: list[str]
@@ -303,6 +306,9 @@ class Orchestrator:
 
         final = self._combine_chain(session.subtasks)
         await self._persist(session, user_text, final, session.subtasks[-1]["agent"])
+        # Cadena terminada: libera la VRAM del modelo grande (Coder/Revisor/Docs comparten uno).
+        if self._s.unload_coder_after_turn:
+            await self._router.release()
 
     @staticmethod
     def _chain_prompt(name: str, user_text: str, prev: str) -> str:

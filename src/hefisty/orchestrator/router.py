@@ -22,3 +22,13 @@ class Router:
         if self._current_big is not None:
             await self._ollama.unload(self._current_big)
         self._current_big = model
+
+    async def release(self) -> None:
+        """Descarga el modelo grande activo al terminar el turno para liberar VRAM.
+
+        Sin esto, el Coder (~13 GB) queda residente `keep_alive` minutos sin trabajar.
+        El frontal y embeddings (pequeños) nunca se tocan.
+        """
+        if self._current_big is not None:
+            await self._ollama.unload(self._current_big)
+            self._current_big = None
