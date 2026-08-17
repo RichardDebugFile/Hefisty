@@ -23,6 +23,7 @@ class Role:
     system_prompt: str
     triggers: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    collection: str = ""
 
 
 def load_role(name: str) -> Role:
@@ -36,7 +37,15 @@ def load_role(name: str) -> Role:
         system_prompt=system,
         triggers=manifest.get("triggers", []),
         tools=manifest.get("tools", []),
+        collection=(manifest.get("knowledge") or {}).get("collection", ""),
     )
+
+
+def list_roles() -> list[Role]:
+    """Roles instalados (carpetas con role.yaml bajo roles/)."""
+    if not ROLES_DIR.is_dir():
+        return []
+    return [load_role(d.name) for d in sorted(ROLES_DIR.iterdir()) if (d / "role.yaml").is_file()]
 
 
 def load_identity() -> str:

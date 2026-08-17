@@ -49,7 +49,7 @@ class Settings(BaseModel):
 
     # Modelos.
     model_frontal: str = "qwen3:1.7b"
-    model_coder: str = "qwen2.5-coder:14b"
+    model_coder: str = "gpt-oss:20b"
     model_embed: str = "nomic-embed-text"
     keep_alive: str = "10m"
 
@@ -61,6 +61,20 @@ class Settings(BaseModel):
     cache_ttl_chat: int = 3600
     cache_ttl_code: int = 600
     max_input_chars: int = 32000
+
+    # Conocimiento (RAG).
+    chunk_tokens: int = 512
+    chunk_overlap: int = 64
+    retrieval_k: int = 6
+    retrieval_score_min: float = 0.4
+    # Umbral de similitud para la cache semántica. 0.80 calibrado para nomic-embed-text
+    # (parafraseos ~0.84, no-relacionados ~0.69); el 0.95 del diseño es irreal para este
+    # modelo. Configurable con HEFISTY_SEMANTIC_THRESHOLD.
+    semantic_threshold: float = 0.80
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return self.data_dir / "knowledge_sources"
 
     @property
     def db_path(self) -> Path:
@@ -81,7 +95,7 @@ class Settings(BaseModel):
             redis_url=e("HEFISTY_REDIS_URL", "redis://127.0.0.1:6379/0"),
             qdrant_url=e("HEFISTY_QDRANT_URL", "http://127.0.0.1:6333"),
             model_frontal=e("HEFISTY_MODEL_FRONTAL", "qwen3:1.7b"),
-            model_coder=e("HEFISTY_MODEL_CODER", "qwen2.5-coder:14b"),
+            model_coder=e("HEFISTY_MODEL_CODER", "gpt-oss:20b"),
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
@@ -89,6 +103,11 @@ class Settings(BaseModel):
             cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
             cache_ttl_code=int(e("HEFISTY_CACHE_TTL_CODE", "600")),
             max_input_chars=int(e("HEFISTY_MAX_INPUT_CHARS", "32000")),
+            chunk_tokens=int(e("HEFISTY_CHUNK_TOKENS", "512")),
+            chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
+            retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
+            retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
+            semantic_threshold=float(e("HEFISTY_SEMANTIC_THRESHOLD", "0.80")),
         )
 
 

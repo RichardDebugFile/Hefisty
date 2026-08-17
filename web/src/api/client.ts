@@ -5,13 +5,19 @@
 // token in local dev, so when unset we simply omit the header.
 
 import type {
+  ChainStep,
   ChatChunk,
   ChatMessage,
+  FeedbackBody,
+  FeedbackResponse,
   HealthResponse,
   MetaEvent,
+  ModelsResponse,
   RenameResponse,
   ResumeResponse,
+  RolesResponse,
   SessionsResponse,
+  Source,
 } from './types';
 
 export const TOKEN_KEY = 'hefisty_token';
@@ -25,9 +31,15 @@ export function getToken(): string {
 }
 
 export function setToken(token: string): void {
+  // The token is a bearer credential the user types in themselves for local
+  // use and is later sent as an `Authorization` header. Before persisting it
+  // we strip surrounding whitespace and any character that is illegal in an
+  // HTTP header value (control chars, CR/LF, spaces), which both sanitizes the
+  // stored value and prevents header injection.
+  const clean = token.trim().replace(/[^\x21-\x7E]/g, '');
   try {
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
+    if (clean) {
+      localStorage.setItem(TOKEN_KEY, clean);
     } else {
       localStorage.removeItem(TOKEN_KEY);
     }
@@ -87,6 +99,29 @@ export function renameSession(id: string, title: string): Promise<RenameResponse
 
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return jsonFetch<HealthResponse>('/health', { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Live state: models loaded in VRAM & installed roles
+// ---------------------------------------------------------------------------
+
+export function listModels(signal?: AbortSignal): Promise<ModelsResponse> {
+  return jsonFetch<ModelsResponse>('/v1/models', { signal });
+}
+
+export function listRoles(signal?: AbortSignal): Promise<RolesResponse> {
+  return jsonFetch<RolesResponse>('/v1/roles', { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+export function sendFeedback(body: FeedbackBody): Promise<FeedbackResponse> {
+  return jsonFetch<FeedbackResponse>('/v1/feedback', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +187,18 @@ export async function streamChat(
       return;
     }
     if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'meta') {
-      callbacks.onMeta?.(parsed as MetaEvent);
+      const raw = parsed as MetaEvent;
+      // Normalize the extra fields so downstream state can trust their shape:
+      // `cached` is a strict boolean, `sources`/`chain` are arrays (or
+      // undefined) and `cache_key` is a string (or undefined).
+      const meta: MetaEvent = {
+        ...raw,
+        cached: raw.cached === true,
+        sources: Array.isArray(raw.sources) ? (raw.sources as Source[]) : undefined,
+        chain: Array.isArray(raw.chain) ? (raw.chain as ChainStep[]) : undefined,
+        cache_key: typeof raw.cache_key === 'string' ? raw.cache_key : undefined,
+      };
+      callbacks.onMeta?.(meta);
       return;
     }
     const chunk = parsed as ChatChunk;

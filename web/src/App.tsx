@@ -5,19 +5,41 @@ import {
   resumeSession,
   streamChat,
 } from './api/client';
-import type { AgentName, ChatMessage, Role, Session } from './api/types';
+import type {
+  AgentName,
+  ChainStep,
+  ChatMessage,
+  Role,
+  Session,
+  Source,
+} from './api/types';
 import { useHealth } from './hooks/useHealth';
+import { useModels } from './hooks/useModels';
+import { useRoles } from './hooks/useRoles';
 import { Sidebar } from './components/Sidebar';
-import { MessageBubble } from './components/MessageBubble';
+import { MessageBubble, type ContentPart } from './components/MessageBubble';
 import { MessageInput } from './components/MessageInput';
 import { AgentBadge } from './components/AgentBadge';
 import { HealthDot } from './components/HealthDot';
+import { LivePanel } from './components/LivePanel';
 import { SettingsModal } from './components/SettingsModal';
 
 interface UiMessage {
   id: string;
   role: Role;
+  // Full plain text of the turn. Kept in sync while streaming so it can be
+  // replayed to the backend as history on the next send.
   content: string;
+  // Chain-aware slices for rendering (one per agent). User/resumed turns have
+  // none and fall back to `content`.
+  parts?: ContentPart[];
+  cached?: boolean;
+  sources?: Source[];
+  // Feedback payload captured from the meta event(s) of this turn.
+  cacheKey?: string;
+  agent?: AgentName;
+  model?: string;
+  sessionId?: string;
 }
 
 let idSeq = 0;
@@ -34,10 +56,14 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [agent, setAgent] = useState<AgentName | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [chain, setChain] = useState<ChainStep[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(true);
 
   const health = useHealth();
+  const models = useModels();
+  const roles = useRoles();
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -67,6 +93,7 @@ export default function App() {
     setMessages([]);
     setAgent(null);
     setModel(null);
+    setChain(null);
     setError(null);
   }, []);
 
@@ -74,12 +101,20 @@ export default function App() {
     async (id: string) => {
       if (streaming) return;
       setError(null);
+      setChain(null);
       try {
         const res = await resumeSession(id);
         setActiveSessionId(res.id);
         setAgent(res.active_agent ?? null);
+        setModel(null);
         setMessages(
-          (res.messages ?? []).map((m) => ({ id: newId(), role: m.role, content: m.content })),
+          (res.messages ?? []).map((m) => ({
+            id: newId(),
+            role: m.role,
+            content: m.content,
+            sessionId: res.id,
+            agent: m.role === 'assistant' ? res.active_agent : undefined,
+          })),
         );
       } catch (e) {
         setError(`No se pudo retomar la sesión: ${(e as Error).message}`);
@@ -105,9 +140,18 @@ export default function App() {
   const handleSend = useCallback(
     async (text: string) => {
       setError(null);
+      // Each new turn starts without a chain; meta events refill it if the
+      // turn ends up being chained.
+      setChain(null);
 
       const userMsg: UiMessage = { id: newId(), role: 'user', content: text };
-      const assistantMsg: UiMessage = { id: newId(), role: 'assistant', content: '' };
+      const assistantMsg: UiMessage = {
+        id: newId(),
+        role: 'assistant',
+        content: '',
+        parts: [],
+        sessionId: activeSessionId ?? undefined,
+      };
 
       // History sent to the backend (OpenAI-compatible): the full visible
       // conversation plus the new user turn. The assistant placeholder is not
@@ -123,13 +167,22 @@ export default function App() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Append streamed text to the current assistant turn: to `content` (for
+      // history) and to the last chain part (for chain-aware rendering).
       const appendToAssistant = (piece: string) => {
         setMessages((prev) => {
           const copy = [...prev];
-          const last = copy[copy.length - 1];
-          if (last && last.role === 'assistant') {
-            copy[copy.length - 1] = { ...last, content: last.content + piece };
+          const idx = copy.length - 1;
+          const last = copy[idx];
+          if (last?.role !== 'assistant') return prev;
+          const parts = last.parts ? [...last.parts] : [];
+          if (parts.length === 0) {
+            parts.push({ text: piece });
+          } else {
+            const li = parts.length - 1;
+            parts[li] = { ...parts[li], text: parts[li].text + piece };
           }
+          copy[idx] = { ...last, content: last.content + piece, parts };
           return copy;
         });
       };
@@ -142,10 +195,46 @@ export default function App() {
             onMeta: (meta) => {
               setAgent(meta.agent ?? null);
               setModel(meta.model ?? null);
+              // Chained turns carry the live sub-task states; keep the latest.
+              if (meta.chain) setChain(meta.chain);
               // A brand-new conversation gets its id from the first meta event.
               if (!activeSessionId && meta.session_id) {
                 setActiveSessionId(meta.session_id);
               }
+              setMessages((prev) => {
+                const copy = [...prev];
+                const idx = copy.length - 1;
+                const last = copy[idx];
+                if (last?.role !== 'assistant') return prev;
+
+                // Chain handling: several meta events arrive per turn (one per
+                // agent). When the active agent changes mid-answer we open a
+                // new part so the bubble shows a "— revisor —" separator; if
+                // the current part is still empty we just relabel it.
+                const parts = last.parts ? [...last.parts] : [];
+                const lastPart = parts[parts.length - 1];
+                if (!lastPart) {
+                  parts.push({ agent: meta.agent, text: '' });
+                } else if (lastPart.agent !== meta.agent) {
+                  if (lastPart.text.length === 0) {
+                    parts[parts.length - 1] = { ...lastPart, agent: meta.agent };
+                  } else {
+                    parts.push({ agent: meta.agent, text: '' });
+                  }
+                }
+
+                copy[idx] = {
+                  ...last,
+                  parts,
+                  cached: meta.cached,
+                  sources: meta.sources ?? last.sources,
+                  cacheKey: meta.cache_key ?? last.cacheKey,
+                  agent: meta.agent ?? last.agent,
+                  model: meta.model ?? last.model,
+                  sessionId: last.sessionId ?? meta.session_id,
+                };
+                return copy;
+              });
             },
             onDelta: appendToAssistant,
           },
@@ -173,8 +262,11 @@ export default function App() {
 
   const showEmptyState = messages.length === 0;
 
+  // Running count of assistant turns, used as feedback `turn_index`.
+  let assistantTurn = -1;
+
   return (
-    <div className="app">
+    <div className={`app${panelOpen ? ' app--panel' : ''}`}>
       <Sidebar
         sessions={sessions}
         activeId={activeSessionId}
@@ -194,6 +286,15 @@ export default function App() {
           <div className="chat__header-right">
             <AgentBadge agent={agent} model={model} streaming={streaming} />
             <HealthDot health={health} />
+            <button
+              className={`panel-toggle${panelOpen ? ' panel-toggle--on' : ''}`}
+              type="button"
+              onClick={() => setPanelOpen((v) => !v)}
+              title={panelOpen ? 'Ocultar panel en vivo' : 'Mostrar panel en vivo'}
+              aria-pressed={panelOpen}
+            >
+              ▦
+            </button>
           </div>
         </header>
 
@@ -220,16 +321,36 @@ export default function App() {
             </div>
           ) : (
             <div className="messages">
-              {messages.map((m, i) => (
-                <MessageBubble
-                  key={m.id}
-                  role={m.role}
-                  content={m.content}
-                  streaming={
-                    streaming && i === messages.length - 1 && m.role === 'assistant'
-                  }
-                />
-              ))}
+              {messages.map((m, i) => {
+                if (m.role === 'assistant') assistantTurn += 1;
+                const isLast = i === messages.length - 1;
+                const isStreaming = streaming && isLast && m.role === 'assistant';
+                // Offer feedback on finished assistant answers only.
+                const canFeedback = m.role === 'assistant' && !isStreaming;
+                return (
+                  <MessageBubble
+                    key={m.id}
+                    role={m.role}
+                    content={m.content}
+                    parts={m.parts}
+                    cached={m.cached}
+                    sources={m.sources}
+                    streaming={isStreaming}
+                    feedback={
+                      canFeedback
+                        ? {
+                            sessionId: m.sessionId ?? activeSessionId,
+                            turnIndex: assistantTurn,
+                            agent: m.agent,
+                            model: m.model,
+                            cacheKey: m.cacheKey,
+                            sources: m.sources,
+                          }
+                        : undefined
+                    }
+                  />
+                );
+              })}
             </div>
           )}
         </div>
@@ -243,6 +364,19 @@ export default function App() {
           />
         </footer>
       </main>
+
+      {panelOpen && (
+        <LivePanel
+          health={health}
+          models={models}
+          agent={agent}
+          model={model}
+          streaming={streaming}
+          chain={chain}
+          roles={roles}
+          onClose={() => setPanelOpen(false)}
+        />
+      )}
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

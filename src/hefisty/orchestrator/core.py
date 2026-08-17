@@ -10,13 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from collections.abc import AsyncIterator
 
 from ..agents.coder import Coder
 from ..cache import L1Cache
 from ..config import Settings
+from ..knowledge.retrieval import Retriever
+from ..knowledge.store import Hit
 from ..ollama_client import Message, OllamaClient
+from ..protections import redact_credentials, sanitize_chunk
 from ..roles import load_identity
+from ..semantic_cache import SemanticCache
 from .router import Router
 from .sessions import Session, SessionStore
 
@@ -40,6 +46,34 @@ DECISION_INSTRUCTION = (
 # Namespace de modelo para la clave de cache (independiente del agente elegido).
 _CACHE_NS = "auto"
 
+logger = logging.getLogger("hefisty.orchestrator")
+
+# Palabras que activan el diccionario de un lenguaje. Ampliable por rol en fases futuras.
+_LANG_KEYWORDS = {
+    "kotlin": (
+        "kotlin",
+        "android",
+        "compose",
+        "jetpack",
+        "gradle",
+        "coroutine",
+        "corrutina",
+        "room",
+        "hilt",
+        "viewmodel",
+        ".kt",
+        "livedata",
+    ),
+}
+
+
+def detect_language(text: str) -> str | None:
+    low = text.lower()
+    for lang, kws in _LANG_KEYWORDS.items():
+        if any(kw in low for kw in kws):
+            return lang
+    return None
+
 
 class Orchestrator:
     def __init__(
@@ -50,6 +84,9 @@ class Orchestrator:
         cache: L1Cache,
         coder: Coder,
         router: Router,
+        retriever: Retriever | None = None,
+        semantic: SemanticCache | None = None,
+        agents: dict[str, Coder] | None = None,
     ) -> None:
         self._s = settings
         self._ollama = ollama
@@ -57,7 +94,21 @@ class Orchestrator:
         self._cache = cache
         self._coder = coder
         self._router = router
+        self._retriever = retriever
+        self._semantic = semantic
+        # Registro de agentes para el encadenamiento. El Coder siempre está.
+        self._agents = agents or {"coder": coder}
         self._identity = load_identity()
+
+    def _plan_chain(self, user_text: str) -> list[str]:
+        """Cadena de agentes según la petición (opt-in por palabras clave)."""
+        low = user_text.lower()
+        chain = ["coder"]
+        if re.search(r"rev[ií]s|review", low) and "revisor" in self._agents:
+            chain.append("revisor")
+        if re.search(r"document|docstring|readme", low) and "docs" in self._agents:
+            chain.append("docs")
+        return chain
 
     async def decide(self, session: Session, user_text: str) -> str:
         messages: list[Message] = [
@@ -93,6 +144,10 @@ class Orchestrator:
     async def stream_turn(self, session: Session, user_text: str) -> AsyncIterator[dict]:
         """Emite eventos {type: meta|content}. La primera es meta (agente/modelo)."""
         cache_msgs: list[Message] = [*session.messages, {"role": "user", "content": user_text}]
+        cache_key = self._cache.key_for(cache_msgs, _CACHE_NS)
+        # La cache semántica solo aplica al primer turno (sin historial): un follow-up como
+        # "sigue" o "¿en qué íbamos?" depende del contexto de SU sesión y no debe compartirse.
+        semantic_ok = self._semantic is not None and not session.messages
 
         cached = await self._cache.get(cache_msgs, _CACHE_NS)
         if cached is not None:
@@ -103,23 +158,57 @@ class Orchestrator:
                 "agent": data["agent"],
                 "model": data["model"],
                 "cached": True,
+                "cache_key": cache_key,
+                "sources": data.get("sources", []),
             }
             yield {"type": "content", "text": data["content"]}
             await self._persist(session, user_text, data["content"], data["agent"])
             return
 
         action = await self.decide(session, user_text)
+        sources: list[dict] = []
         if action == "delegate":
+            chain = self._plan_chain(user_text)
+            if len(chain) > 1:
+                async for ev in self._stream_chain(session, user_text, chain):
+                    yield ev
+                return
             agent, model = "coder", self._coder.model
             await self._router.activate(model)
-            gen = self._coder.stream(
-                [*session.messages[-16:], {"role": "user", "content": user_text}]
-            )
-            ttl = self._s.cache_ttl_code
+            hits, lang = await self._retrieve(user_text)
+            coder_msgs: list[Message] = [
+                *session.messages[-16:],
+                {"role": "user", "content": user_text},
+            ]
+            if hits:
+                coder_msgs = [self._context_message(hits), *coder_msgs]
+                logger.info("retrieval: %d chunks (lang=%s)", len(hits), lang)
+                sources = [
+                    {"source": h.source, "section": h.section, "score": round(h.score, 3)}
+                    for h in hits
+                ]
+            gen = self._coder.stream(coder_msgs)
+            cacheable = False  # tareas del Coder no se cachean (el workspace cambia)
         else:
             agent, model = "hefisty", self._s.model_frontal
+            # Cache semántica (parafraseos): solo charla/conocimiento, primer turno.
+            if semantic_ok:
+                sc = await self._semantic.get(user_text)
+                if sc is not None:
+                    yield {
+                        "type": "meta",
+                        "session_id": session.id,
+                        "agent": sc.get("agent", agent),
+                        "model": sc.get("model", model),
+                        "cached": True,
+                        "cache_key": cache_key,
+                        "sources": sc.get("sources", []),
+                    }
+                    yield {"type": "content", "text": sc["content"]}
+                    await self._persist(session, user_text, sc["content"], sc.get("agent", agent))
+                    return
             gen = self._reply_stream(session, user_text)
-            ttl = self._s.cache_ttl_chat
+            cacheable = True
 
         yield {
             "type": "meta",
@@ -127,20 +216,160 @@ class Orchestrator:
             "agent": agent,
             "model": model,
             "cached": False,
+            "cache_key": cache_key,
+            "sources": sources,
         }
-        parts: list[str] = []
-        async for piece in gen:
-            parts.append(piece)
-            yield {"type": "content", "text": piece}
-
-        content = "".join(parts)
+        content = ""
+        async for kind, text in self._stream_redacted(gen):
+            if kind == "content":
+                yield {"type": "content", "text": text}
+            else:
+                content = text
         await self._persist(session, user_text, content, agent)
-        await self._cache.set(
-            cache_msgs,
-            _CACHE_NS,
-            json.dumps({"agent": agent, "model": model, "content": content}),
-            ttl,
+        if cacheable:
+            value = {"agent": agent, "model": model, "content": content, "sources": sources}
+            await self._cache.set(cache_msgs, _CACHE_NS, json.dumps(value), self._s.cache_ttl_chat)
+            if semantic_ok:
+                await self._semantic.put(user_text, value)
+
+    async def _stream_chain(
+        self, session: Session, user_text: str, chain: list[str]
+    ) -> AsyncIterator[dict]:
+        session.subtasks = [
+            {"agent": a, "input": "", "state": "pendiente", "result": ""} for a in chain
+        ]
+        session.subtasks[0]["input"] = user_text
+        await asyncio.to_thread(self._sessions.save, session)
+        async for ev in self._run_chain_from(session, user_text, 0):
+            yield ev
+
+    async def resume_chain(self, session: Session) -> AsyncIterator[dict]:
+        """Continúa una cadena a medias desde la subtarea siguiente a la última completada."""
+        pending = [i for i, st in enumerate(session.subtasks) if st["state"] != "hecha"]
+        if not pending:
+            return
+        user_text = session.subtasks[0].get("input") or ""
+        async for ev in self._run_chain_from(session, user_text, pending[0]):
+            yield ev
+
+    async def _run_chain_from(
+        self, session: Session, user_text: str, start: int
+    ) -> AsyncIterator[dict]:
+        prev = session.subtasks[start - 1]["result"] if start > 0 else user_text
+        for i in range(start, len(session.subtasks)):
+            st = session.subtasks[i]
+            name = st["agent"]
+            agent_obj = self._agents.get(name)
+            if agent_obj is None:
+                st["state"] = "fallida"
+                await asyncio.to_thread(self._sessions.save, session)
+                continue
+            step_input = user_text if i == 0 else self._chain_prompt(name, user_text, prev)
+            st["input"] = step_input[:1000]
+            st["state"] = "en_curso"
+            await asyncio.to_thread(self._sessions.save, session)
+
+            msgs: list[Message] = [{"role": "user", "content": step_input}]
+            sources: list[dict] = []
+            if name == "coder":
+                hits, _lang = await self._retrieve(user_text)
+                if hits:
+                    msgs = [self._context_message(hits), *msgs]
+                    sources = [
+                        {"source": h.source, "section": h.section, "score": round(h.score, 3)}
+                        for h in hits
+                    ]
+            await self._router.activate(agent_obj.model)
+            yield {
+                "type": "meta",
+                "session_id": session.id,
+                "agent": name,
+                "model": agent_obj.model,
+                "cached": False,
+                "cache_key": "",
+                "sources": sources,
+                "chain": self._chain_state(session),
+            }
+            result = ""
+            async for kind, text in self._stream_redacted(agent_obj.stream(msgs)):
+                if kind == "content":
+                    yield {"type": "content", "text": text}
+                else:
+                    result = text
+            st["result"] = result
+            st["state"] = "hecha"
+            await asyncio.to_thread(self._sessions.save, session)
+            prev = st["result"]
+
+        final = self._combine_chain(session.subtasks)
+        await self._persist(session, user_text, final, session.subtasks[-1]["agent"])
+
+    @staticmethod
+    def _chain_prompt(name: str, user_text: str, prev: str) -> str:
+        if name == "revisor":
+            return f"Revisa este resultado para la tarea «{user_text}»:\n\n{prev}"
+        if name == "docs":
+            return f"Documenta lo siguiente:\n\n{prev}"
+        return prev
+
+    @staticmethod
+    def _chain_state(session: Session) -> list[dict]:
+        return [{"agent": st["agent"], "state": st["state"]} for st in session.subtasks]
+
+    @staticmethod
+    def _combine_chain(subtasks: list[dict]) -> str:
+        return "\n\n".join(
+            f"### {st['agent']}\n{st['result']}" for st in subtasks if st.get("result")
         )
+
+    @staticmethod
+    async def _stream_redacted(gen: AsyncIterator[str]):
+        """Redacta credenciales sobre un stream aguantando una cola, por si una credencial
+        cruza el límite entre chunks. Emite ('content', txt) y al final ('final', completo)."""
+        tail = 200  # ninguna credencial soportada supera esta longitud
+        acc = ""
+        emitted = 0
+        async for piece in gen:
+            acc += piece
+            red, _ = redact_credentials(acc)
+            safe = max(0, len(red) - tail)
+            if safe > emitted:
+                yield ("content", red[emitted:safe])
+                emitted = safe
+        red, _ = redact_credentials(acc)
+        if len(red) > emitted:
+            yield ("content", red[emitted:])
+        yield ("final", red)
+
+    async def _retrieve(self, user_text: str) -> tuple[list[Hit], str | None]:
+        if self._retriever is None:
+            return [], None
+        lang = detect_language(user_text)
+        collections = [c for c in [lang, "patrones"] if c]
+        if not collections:
+            return [], lang
+        try:
+            hits = await self._retriever.retrieve(user_text, collections)
+        except Exception as exc:  # resiliencia: Qdrant caído no rompe el turno
+            logger.warning("retrieval falló: %s", exc)
+            return [], lang
+        return hits, lang
+
+    @staticmethod
+    def _context_message(hits: list[Hit]) -> Message:
+        parts = []
+        for h in hits:
+            # Los chunks pueden venir de docs de terceros: degradar si traen injection.
+            safe, _degraded = sanitize_chunk(h.text)
+            parts.append(f"[{h.source}] ({h.section})\n{safe}")
+        blocks = "\n\n".join(parts)
+        return {
+            "role": "system",
+            "content": (
+                "Contexto recuperado del diccionario. Úsalo si es relevante y CITA la "
+                "fuente entre corchetes, p. ej. [archivo.md]. Si no aporta, ignóralo.\n\n" + blocks
+            ),
+        }
 
     async def _persist(
         self, session: Session, user_text: str, assistant_text: str, agent: str

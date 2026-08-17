@@ -2,10 +2,10 @@
 name: coder
 description: "Agente de programación: escribe, corrige, revisa y explica código."
 triggers: ["código", "programa", "función", "bug", "script", "refactor", "test", "clase"]
-model: qwen2.5-coder:14b
+model: gpt-oss:20b
 system_prompt: prompts/coder.md
 knowledge:
   collection: coder       # colección Qdrant; se puebla en Fase 3
   sources: []
-tools: [leer_archivo, escribir_archivo, listar_directorio]
+tools: [leer_archivo, escribir_archivo, listar_directorio, glob, grep, read_range, edit, search_code]
 lora: null

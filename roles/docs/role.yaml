@@ -1,0 +1,11 @@
+# Manifiesto del rol Docs (esquema en docs/ROLES.md).
+name: docs
+description: "Documentador: genera y actualiza docstrings, comentarios y README de lo tocado."
+triggers: ["documenta", "docstring", "readme", "explica", "comenta"]
+model: gpt-oss:20b
+system_prompt: prompts/docs.md
+knowledge:
+  collection: docs
+  sources: []
+tools: [leer_archivo, read_range, escribir_archivo]
+lora: null
