@@ -22,10 +22,17 @@ class Retriever:
         vec = vecs[0]
         hits: list[Hit] = []
         for col in collections:
-            hits.extend(
-                await asyncio.to_thread(
-                    self._store.search, col, vec, self._s.retrieval_k, self._s.retrieval_score_min
+            try:
+                hits.extend(
+                    await asyncio.to_thread(
+                        self._store.search,
+                        col,
+                        vec,
+                        self._s.retrieval_k,
+                        self._s.retrieval_score_min,
+                    )
                 )
-            )
+            except Exception:  # una colección inexistente/caída no anula al resto
+                continue
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[: self._s.retrieval_k]
