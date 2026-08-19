@@ -23,6 +23,7 @@ from ..cache import L1Cache
 from ..config import Settings, get_settings
 from ..knowledge.retrieval import Retriever
 from ..knowledge.store import KnowledgeStore
+from ..memory import MemoryService, MemoryStore
 from ..ollama_client import OllamaClient
 from ..orchestrator.core import Orchestrator
 from ..orchestrator.router import Router
@@ -69,6 +70,7 @@ def create_app(
             except FileNotFoundError:
                 pass
         router = Router(ollama, small_models={settings.model_frontal, settings.model_embed})
+        memory = MemoryService(settings, ollama, MemoryStore(settings.db_path), knowledge)
         orchestrator = Orchestrator(
             settings,
             ollama,
@@ -79,6 +81,7 @@ def create_app(
             retriever=Retriever(settings, ollama, knowledge),
             semantic=semantic,
             agents=agents,
+            memory=memory,
         )
     auth = make_auth_dep(settings.api_token)
 

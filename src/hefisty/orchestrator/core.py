@@ -20,6 +20,7 @@ from ..config import Settings
 from ..knowledge.retrieval import Retriever
 from ..knowledge.store import Hit
 from ..lang import detect_language
+from ..memory import MemoryService
 from ..ollama_client import Message, OllamaClient
 from ..protections import redact_credentials, sanitize_chunk
 from ..roles import load_identity
@@ -62,6 +63,7 @@ class Orchestrator:
         retriever: Retriever | None = None,
         semantic: SemanticCache | None = None,
         agents: dict[str, Coder] | None = None,
+        memory: MemoryService | None = None,
     ) -> None:
         self._s = settings
         self._ollama = ollama
@@ -71,6 +73,7 @@ class Orchestrator:
         self._router = router
         self._retriever = retriever
         self._semantic = semantic
+        self._memory = memory
         # Registro de agentes para el encadenamiento. El Coder siempre está.
         self._agents = agents or {"coder": coder}
         self._identity = load_identity()
@@ -105,9 +108,27 @@ class Orchestrator:
             return "delegate"
         return "reply"
 
+    async def _memory_context(self, user_text: str) -> str:
+        """Recuerdos relevantes de sesiones anteriores para el contexto del frontal."""
+        if self._memory is None:
+            return ""
+        try:
+            facts = await self._memory.recall(user_text)
+        except Exception as exc:  # Qdrant caído no rompe el turno
+            logger.warning("recall de memoria falló: %s", exc)
+            return ""
+        if not facts:
+            return ""
+        joined = "\n".join(f"- {f}" for f in facts)
+        return (
+            "\n\nRecuerdos sobre el usuario (de sesiones anteriores; úsalos si son "
+            "relevantes, no los recites literalmente):\n" + joined
+        )
+
     async def _reply_stream(self, session: Session, user_text: str) -> AsyncIterator[str]:
+        memory = await self._memory_context(user_text)
         messages: list[Message] = [
-            {"role": "system", "content": self._identity},
+            {"role": "system", "content": self._identity + memory},
             *session.messages[-16:],
             {"role": "user", "content": user_text},
         ]
@@ -361,3 +382,18 @@ class Orchestrator:
         if session.title == "Nueva sesión" and user_text.strip():
             session.title = user_text.strip()[:48]
         await asyncio.to_thread(self._sessions.save, session)
+        await self._maybe_consolidate(session)
+
+    async def _maybe_consolidate(self, session: Session) -> None:
+        """Cada N turnos, el frontal repasa la conversación y extrae recuerdos nuevos."""
+        if self._memory is None:
+            return
+        turns = len(session.messages) // 2
+        if turns == 0 or turns % self._s.memory_consolidate_every != 0:
+            return
+        try:
+            n = await self._memory.consolidate(session.messages, origin=session.id)
+            if n:
+                logger.info("memoria: %d recuerdos consolidados (sesión %s)", n, session.id)
+        except Exception as exc:  # la consolidación nunca debe tumbar el turno
+            logger.warning("consolidación de memoria falló: %s", exc)
