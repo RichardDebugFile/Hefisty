@@ -77,6 +77,14 @@ class Settings(BaseModel):
     # modelo. Configurable con HEFISTY_SEMANTIC_THRESHOLD.
     semantic_threshold: float = 0.80
 
+    # Memoria de largo plazo (Fase 4).
+    memory_recall_k: int = 4  # recuerdos inyectados por turno
+    memory_score_min: float = 0.55  # umbral de similitud para recuperar un recuerdo
+    memory_dedup_min: float = 0.80  # por encima => se considera el mismo recuerdo (actualiza)
+    memory_confidence_min: float = 0.6  # confianza mínima del frontal para memorizar
+    memory_consolidate_every: int = 6  # turnos entre consolidaciones
+    memory_decay_days: int = 30  # sin uso y más viejo que esto => se archiva
+
     @property
     def knowledge_dir(self) -> Path:
         return self.data_dir / "knowledge_sources"
@@ -115,6 +123,12 @@ class Settings(BaseModel):
             retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
             retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
             semantic_threshold=float(e("HEFISTY_SEMANTIC_THRESHOLD", "0.80")),
+            memory_recall_k=int(e("HEFISTY_MEMORY_RECALL_K", "4")),
+            memory_score_min=float(e("HEFISTY_MEMORY_SCORE_MIN", "0.55")),
+            memory_dedup_min=float(e("HEFISTY_MEMORY_DEDUP_MIN", "0.80")),
+            memory_confidence_min=float(e("HEFISTY_MEMORY_CONFIDENCE_MIN", "0.6")),
+            memory_consolidate_every=int(e("HEFISTY_MEMORY_CONSOLIDATE_EVERY", "6")),
+            memory_decay_days=int(e("HEFISTY_MEMORY_DECAY_DAYS", "30")),
         )
 
 

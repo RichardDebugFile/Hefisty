@@ -255,6 +255,109 @@ def index_cmd(ruta: str = typer.Argument(".", help="Ruta del repo a indexar.")) 
     )
 
 
+# --- Memoria de largo plazo (Fase 4) ---
+
+memory_app = typer.Typer(help="Memoria de largo plazo de Hefisty.")
+app.add_typer(memory_app, name="memory")
+
+
+def _memory_deps():
+    from .knowledge.store import KnowledgeStore
+    from .memory import MemoryService, MemoryStore
+    from .ollama_client import OllamaClient
+
+    s = get_settings()
+    ollama = OllamaClient(s.ollama_url)
+    store = MemoryStore(s.db_path)
+    return s, ollama, store, MemoryService(s, ollama, store, KnowledgeStore(s.qdrant_url))
+
+
+@memory_app.command("list")
+def memory_list(todos: bool = typer.Option(False, "--all", help="Incluye archivados.")) -> None:
+    """Lista los recuerdos."""
+    _, _, store, _ = _memory_deps()
+    mems = store.list(include_archived=todos)
+    if not mems:
+        typer.echo("Sin recuerdos.")
+        return
+    for m in mems:
+        flags = " ".join(
+            filter(None, ["[fijado]" if m.pinned else "", "[archivado]" if m.archived else ""])
+        )
+        typer.echo(f"[{m.id}] ({m.category}) usos={m.uses} {flags}  {m.fact}")
+
+
+@memory_app.command("add")
+def memory_add(
+    hecho: str = typer.Argument(..., help="El hecho a recordar."),
+    categoria: str = typer.Option("manual", "--category", "-c", help="Categoría."),
+) -> None:
+    """Añade un recuerdo manualmente."""
+    _, ollama, _, svc = _memory_deps()
+
+    async def _go():
+        try:
+            return await svc.add_manual(hecho, categoria)
+        finally:
+            await ollama.aclose()
+
+    mem = asyncio.run(_go())
+    if mem:
+        typer.secho(f"recordado [{mem.id}]: {mem.fact}", fg=typer.colors.GREEN)
+    else:
+        typer.secho("no se pudo (revisa embeddings/Qdrant)", fg=typer.colors.RED, err=True)
+
+
+@memory_app.command("forget")
+def memory_forget(mem_id: int = typer.Argument(..., help="ID del recuerdo.")) -> None:
+    """Borra un recuerdo (SQLite + Qdrant)."""
+    _, _, _, svc = _memory_deps()
+    if svc.forget(mem_id):
+        typer.secho(f"olvidado [{mem_id}]", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"no existe [{mem_id}]", fg=typer.colors.RED, err=True)
+
+
+@memory_app.command("pin")
+def memory_pin(
+    mem_id: int = typer.Argument(..., help="ID del recuerdo."),
+    quitar: bool = typer.Option(False, "--off", help="Desfijar en vez de fijar."),
+) -> None:
+    """Fija (o desfija con --off) un recuerdo para que nunca decaiga."""
+    _, _, store, _ = _memory_deps()
+    if store.set_pinned(mem_id, not quitar):
+        typer.secho(f"{'desfijado' if quitar else 'fijado'} [{mem_id}]", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"no existe [{mem_id}]", fg=typer.colors.RED, err=True)
+
+
+@memory_app.command("learn")
+def memory_learn(session_id: str = typer.Argument(..., help="Sesión a consolidar.")) -> None:
+    """Consolida los recuerdos de una sesión (equivale al cierre de sesión)."""
+    from .orchestrator.sessions import SessionStore
+
+    s, ollama, _, svc = _memory_deps()
+    sess = SessionStore(s.db_path).get(session_id)
+    if sess is None:
+        typer.secho(f"no existe la sesión {session_id}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    async def _go():
+        try:
+            return await svc.consolidate(sess.messages, origin=sess.id)
+        finally:
+            await ollama.aclose()
+
+    typer.secho(f"{asyncio.run(_go())} recuerdos consolidados", fg=typer.colors.GREEN)
+
+
+@memory_app.command("decay")
+def memory_decay() -> None:
+    """Archiva recuerdos viejos y sin uso (salvo los fijados)."""
+    _, _, _, svc = _memory_deps()
+    typer.secho(f"{svc.decay()} recuerdos archivados", fg=typer.colors.GREEN)
+
+
 @app.command("code")
 def code_cmd(
     tarea: str = typer.Argument(..., help="Tarea de código a resolver en el workspace."),
