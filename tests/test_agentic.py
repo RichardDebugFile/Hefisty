@@ -14,7 +14,11 @@ class ScriptedOllama:
         self.calls = 0
 
     async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
-        msg = self._script[self.calls]
+        # Al agotar el guion devuelve un cierre vacío (cubre el pase de auto-revisión).
+        msg = self._script[self.calls] if self.calls < len(self._script) else {
+            "content": "",
+            "tool_calls": [],
+        }
         self.calls += 1
         return msg
 
@@ -112,7 +116,10 @@ class CapturingOllama:
     async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
-        msg = self._script[self.calls]
+        msg = self._script[self.calls] if self.calls < len(self._script) else {
+            "content": "",
+            "tool_calls": [],
+        }
         self.calls += 1
         return msg
 
@@ -140,6 +147,26 @@ async def test_agentic_without_retriever_has_no_dictionary_context(tmp_path):
     await agent.run("cualquier tarea")  # workspace vacío -> tampoco árbol
     system_msgs = [m for m in ollama.first_messages if m["role"] == "system"]
     assert len(system_msgs) == 1  # solo el system prompt del rol, sin diccionario ni árbol
+
+
+async def test_agentic_self_review_gives_second_chance(tmp_path):
+    # El modelo dice "listo" sin editar; el pase de revisión lo empuja a aplicar el cambio.
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    script = [
+        {"content": "Listo (pero no edité).", "tool_calls": []},  # cierre prematuro
+        {
+            "content": "",
+            "tool_calls": [
+                _tc("edit", {"ruta": "a.py", "texto_viejo": "x = 1", "texto_nuevo": "x = 2"})
+            ],
+        },
+        {"content": "Ahora sí, cambié x a 2.", "tool_calls": []},
+    ]
+    agent = AgenticCoder(ScriptedOllama(script), load_role("coder"), tmp_path, Settings())
+    res = await agent.run("cambia x a 2", None)
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
+    assert res["steps"] == 1  # la edición ocurrió tras el nudge
+    assert "cambié x a 2" in res["answer"].lower()
 
 
 async def test_agentic_tolerates_malformed_tool_args(tmp_path):

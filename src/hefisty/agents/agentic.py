@@ -83,8 +83,19 @@ TOOLS_SPEC = [
 _TOOL_GUIDANCE = (
     "\n\nTienes herramientas para trabajar en el workspace. NO pidas rutas al usuario: "
     "descúbrelas tú con glob/grep/search_code, lee con read_range/leer_archivo y modifica "
-    "con edit (reemplazo exacto) o escribir_archivo. Cuando termines, responde con un "
-    "resumen breve de lo que hiciste."
+    "con edit (reemplazo exacto) o escribir_archivo. Para cambios extensos o refactors, "
+    "reescribe el archivo completo con escribir_archivo en vez de muchos edit pequeños. "
+    "Aplica SIEMPRE los cambios en los archivos (no solo los describas). Cuando termines, "
+    "responde con un resumen breve de lo que hiciste."
+)
+
+# Un único pase de auto-revisión antes de cerrar: reduce que el modelo se quede a medias
+# en tareas de muchas condiciones (p. ej. web-ARIA con 10 requisitos).
+_REVIEW_NUDGE = (
+    "Antes de terminar, revisa el enunciado punto por punto: ¿aplicaste en los archivos "
+    "TODOS los cambios pedidos, no solo algunos? Si algo quedó a medias o sin hacer, "
+    "corrígelo AHORA con edit/escribir_archivo. Si de verdad está todo completo, responde "
+    "solo con un resumen breve."
 )
 
 _TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
@@ -121,7 +132,7 @@ class AgenticCoder:
         settings: Settings,
         retriever: Retriever | None = None,
         repo_collection: str | None = None,
-        max_rounds: int = 8,
+        max_rounds: int = 12,
     ) -> None:
         self._ollama = ollama
         self._role = role
@@ -238,6 +249,8 @@ class AgenticCoder:
             )
         convo.append({"role": "user", "content": task})
         steps = 0
+        reviewed = False
+        last_answer = ""
         for _ in range(self._max_rounds):
             msg = await self._ollama.chat_tools(
                 self._role.model, convo, TOOLS_SPEC, keep_alive=self._s.keep_alive
@@ -249,8 +262,15 @@ class AgenticCoder:
                 if fallback is not None:
                     tool_calls = [fallback]
             if not tool_calls:
+                if content:
+                    last_answer = content
+                if not reviewed:  # un pase de auto-revisión antes de cerrar
+                    reviewed = True
+                    convo.append({"role": "assistant", "content": content})
+                    convo.append({"role": "user", "content": _REVIEW_NUDGE})
+                    continue
                 return {
-                    "answer": content,
+                    "answer": content or last_answer,
                     "touched": sorted(self._touched),
                     "steps": steps,
                 }
