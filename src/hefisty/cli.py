@@ -376,6 +376,43 @@ def feedback_export(rol: str = typer.Argument(..., help="Rol cuyo feedback expor
     typer.secho(f"{n} pares -> {path}", fg=typer.colors.GREEN)
 
 
+# --- Roles (Fase 4) ---
+
+role_app = typer.Typer(help="Roles de Hefisty.")
+app.add_typer(role_app, name="role")
+
+
+@role_app.command("create")
+def role_create(
+    nombre: str = typer.Argument(..., help="Nombre del rol (minúsculas)."),
+    desc: str = typer.Option(..., "--desc", "-d", help="Qué hace el rol."),
+    model: str = typer.Option("", "--model", "-m", help="Modelo (por defecto el del Coder)."),
+    triggers: str = typer.Option("", "--triggers", "-t", help="Palabras clave (coma)."),
+) -> None:
+    """Crea el paquete de un rol nuevo (manifiesto + prompt esqueleto)."""
+    from .roles import create_role
+
+    s = get_settings()
+    trigs = [t.strip() for t in triggers.split(",") if t.strip()]
+    try:
+        base = create_role(nombre, desc, model=model or s.model_coder, triggers=trigs)
+    except (ValueError, FileExistsError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    typer.secho(f"rol creado: {base}", fg=typer.colors.GREEN)
+    typer.echo(f"Ingesta sus fuentes con: hefisty knowledge ingest {base.name} --path <dir>")
+
+
+@role_app.command("list")
+def role_list() -> None:
+    """Lista los roles instalados."""
+    from .roles import list_roles
+
+    for r in list_roles():
+        col = r.collection or "-"
+        typer.echo(f"{r.name}: {r.description}  (modelo={r.model}, coleccion={col})")
+
+
 @app.command("code")
 def code_cmd(
     tarea: str = typer.Argument(..., help="Tarea de código a resolver en el workspace."),
