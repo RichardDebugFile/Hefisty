@@ -358,6 +358,24 @@ def memory_decay() -> None:
     typer.secho(f"{svc.decay()} recuerdos archivados", fg=typer.colors.GREEN)
 
 
+# --- Feedback -> datasets de corrección (Fase 4) ---
+
+feedback_app = typer.Typer(help="Feedback y datasets de corrección.")
+app.add_typer(feedback_app, name="feedback")
+
+
+@feedback_app.command("export")
+def feedback_export(rol: str = typer.Argument(..., help="Rol cuyo feedback exportar.")) -> None:
+    """Exporta el feedback del rol a data/datasets/corrections/<rol>.jsonl."""
+    from .feedback import export_corrections
+    from .orchestrator.sessions import SessionStore
+
+    s = get_settings()
+    out = s.data_dir / "datasets" / "corrections"
+    path, n = export_corrections(SessionStore(s.db_path), rol, out)
+    typer.secho(f"{n} pares -> {path}", fg=typer.colors.GREEN)
+
+
 @app.command("code")
 def code_cmd(
     tarea: str = typer.Argument(..., help="Tarea de código a resolver en el workspace."),
