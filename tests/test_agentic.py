@@ -141,6 +141,17 @@ async def test_agentic_injects_dictionary_context(tmp_path):
     assert retriever.collections == ["patrones"]  # sin lenguaje detectado → solo el comodín
 
 
+async def test_agentic_uses_extra_collections(tmp_path):
+    # Con extra_collections configuradas (diccionario de proyecto), el Coder las consulta.
+    hit = SimpleNamespace(source="proyecto.md", section="x", text="dato del proyecto", score=0.9)
+    retriever = FakeRetriever([hit])
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    settings = Settings(extra_collections=["proyecto"])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, settings, retriever=retriever)
+    await agent.run("arregla algo en kotlin con compose")  # lang=kotlin
+    assert retriever.collections == ["kotlin", "proyecto", "patrones"]
+
+
 async def test_agentic_without_retriever_has_no_dictionary_context(tmp_path):
     ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
     agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())  # retriever=None

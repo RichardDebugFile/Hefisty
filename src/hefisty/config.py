@@ -72,6 +72,9 @@ class Settings(BaseModel):
     chunk_overlap: int = 64
     retrieval_k: int = 6
     retrieval_score_min: float = 0.4
+    # Colecciones extra que el Coder consulta SIEMPRE, además de [lenguaje, patrones].
+    # Para diccionarios por proyecto (p. ej. el repo objetivo). Coma-separado en el entorno.
+    extra_collections: list[str] = []
     # Umbral de similitud para la cache semántica. 0.80 calibrado para nomic-embed-text
     # (parafraseos ~0.84, no-relacionados ~0.69); el 0.95 del diseño es irreal para este
     # modelo. Configurable con HEFISTY_SEMANTIC_THRESHOLD.
@@ -122,6 +125,9 @@ class Settings(BaseModel):
             chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
             retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
             retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
+            extra_collections=[
+                c.strip() for c in e("HEFISTY_EXTRA_COLLECTIONS", "").split(",") if c.strip()
+            ],
             semantic_threshold=float(e("HEFISTY_SEMANTIC_THRESHOLD", "0.80")),
             memory_recall_k=int(e("HEFISTY_MEMORY_RECALL_K", "4")),
             memory_score_min=float(e("HEFISTY_MEMORY_SCORE_MIN", "0.55")),

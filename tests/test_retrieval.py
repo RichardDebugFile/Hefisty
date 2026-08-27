@@ -1,6 +1,7 @@
 from hefisty.config import Settings
 from hefisty.knowledge.retrieval import Retriever
 from hefisty.knowledge.store import Hit
+from hefisty.lang import collections_for
 from hefisty.orchestrator.core import detect_language
 
 
@@ -22,6 +23,13 @@ def test_detect_language():
     assert detect_language("escribe una app Android con Compose") == "kotlin"
     assert detect_language("un archivo .kt de ejemplo") == "kotlin"
     assert detect_language("hola, ¿qué tal?") is None
+
+
+def test_collections_for_dedup_and_order():
+    assert collections_for("kotlin", ["proyecto"]) == ["kotlin", "proyecto", "patrones"]
+    assert collections_for(None, []) == ["patrones"]
+    assert collections_for(None, ["a", "b"]) == ["a", "b", "patrones"]
+    assert collections_for("patrones", ["patrones"]) == ["patrones"]  # sin duplicados
 
 
 async def test_retriever_filters_by_threshold_and_orders():

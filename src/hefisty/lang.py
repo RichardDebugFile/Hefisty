@@ -31,3 +31,13 @@ def detect_language(text: str) -> str | None:
         if any(kw in low for kw in kws):
             return lang
     return None
+
+
+def collections_for(lang: str | None, extra: list[str] | None = None) -> list[str]:
+    """Colecciones a consultar en retrieval: lenguaje detectado + extras (config de
+    proyecto) + comodín `patrones`. Sin vacíos ni duplicados, preservando el orden."""
+    out: list[str] = []
+    for c in [lang, *(extra or []), "patrones"]:
+        if c and c not in out:
+            out.append(c)
+    return out
