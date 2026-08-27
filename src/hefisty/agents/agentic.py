@@ -16,7 +16,7 @@ from typing import Any
 
 from ..config import Settings
 from ..knowledge.retrieval import Retriever
-from ..lang import detect_language
+from ..lang import collections_for, detect_language
 from ..ollama_client import OllamaClient
 from ..protections import sanitize_chunk
 from ..roles import Role
@@ -189,7 +189,7 @@ class AgenticCoder:
         if self._retriever is None:
             return []
         lang = detect_language(task)
-        collections = [c for c in [lang, "patrones"] if c]
+        collections = collections_for(lang, self._s.extra_collections)
         if not collections:
             return []
         try:

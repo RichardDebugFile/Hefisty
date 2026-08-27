@@ -19,7 +19,7 @@ from ..cache import L1Cache
 from ..config import Settings
 from ..knowledge.retrieval import Retriever
 from ..knowledge.store import Hit
-from ..lang import detect_language
+from ..lang import collections_for, detect_language
 from ..memory import MemoryService
 from ..ollama_client import Message, OllamaClient
 from ..protections import redact_credentials, sanitize_chunk
@@ -347,7 +347,7 @@ class Orchestrator:
         if self._retriever is None:
             return [], None
         lang = detect_language(user_text)
-        collections = [c for c in [lang, "patrones"] if c]
+        collections = collections_for(lang, self._s.extra_collections)
         if not collections:
             return [], lang
         try:
