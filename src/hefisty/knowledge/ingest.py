@@ -65,10 +65,13 @@ async def ingest_path(
     if not texts:
         return IngestResult(collection, files, 0)
 
-    vectors: list[list[float]] = []
+    # Embeber y subir por lotes: un upsert único con muchas fuentes supera el límite de
+    # tamaño de request de Qdrant (32 MB).
+    n = 0
     for i in range(0, len(texts), _EMBED_BATCH):
-        vectors.extend(await ollama.embed(settings.model_embed, texts[i : i + _EMBED_BATCH]))
-
-    store.ensure(collection, dim=len(vectors[0]))
-    n = store.upsert(collection, vectors, payloads)
+        vectors = await ollama.embed(settings.model_embed, texts[i : i + _EMBED_BATCH])
+        if not vectors:
+            continue
+        store.ensure(collection, dim=len(vectors[0]))
+        n += store.upsert(collection, vectors, payloads[i : i + _EMBED_BATCH])
     return IngestResult(collection, files, n)

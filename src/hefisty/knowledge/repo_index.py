@@ -93,13 +93,15 @@ async def index_repo(
                 }
             )
 
+    # Embeber Y subir por lotes: un upsert único con todo un repo grande supera el límite de
+    # tamaño de request de Qdrant (32 MB). Por lote acota la memoria y el tamaño de la petición.
     chunks = 0
-    if texts:
-        vectors: list[list[float]] = []
-        for i in range(0, len(texts), _EMBED_BATCH):
-            vectors.extend(await ollama.embed(settings.model_embed, texts[i : i + _EMBED_BATCH]))
+    for i in range(0, len(texts), _EMBED_BATCH):
+        vectors = await ollama.embed(settings.model_embed, texts[i : i + _EMBED_BATCH])
+        if not vectors:
+            continue
         store.ensure(col, dim=len(vectors[0]))
-        chunks = store.upsert(col, vectors, payloads)
+        chunks += store.upsert(col, vectors, payloads[i : i + _EMBED_BATCH])
 
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(new_manifest), encoding="utf-8")
