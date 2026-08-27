@@ -18,9 +18,10 @@ Message = dict[str, str]
 
 # Reintentos ante 500 transitorios de Ollama (gpt-oss ocasionalmente devuelve 500 con
 # tools/contexto y se recupera al reintentar; era el modo de fallo de las tareas Java del
-# benchmark). Backoff corto exponencial.
-_MAX_TRIES = 3
-_BACKOFF_BASE = 0.5
+# benchmark). Bajo carga sostenida Ollama puede tardar varios segundos en recuperarse, así
+# que damos varios intentos con backoff exponencial (~0.75+1.5+3+6 ≈ 11 s de ventana).
+_MAX_TRIES = 5
+_BACKOFF_BASE = 0.75
 
 
 class OllamaError(RuntimeError):
@@ -92,6 +93,7 @@ class OllamaClient:
         tools: list[dict[str, Any]],
         *,
         keep_alive: str | int = "10m",
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Chat con function calling. Devuelve el mensaje (con `content` y `tool_calls`)."""
         payload: dict[str, Any] = {
@@ -101,6 +103,8 @@ class OllamaClient:
             "keep_alive": keep_alive,
             "tools": tools,
         }
+        if options:
+            payload["options"] = options
         data = await self._post_chat(payload, "chat_tools")
         return data.get("message", {})
 
