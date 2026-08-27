@@ -72,10 +72,21 @@ class Settings(BaseModel):
     chunk_overlap: int = 64
     retrieval_k: int = 6
     retrieval_score_min: float = 0.4
+    # Colecciones extra que el Coder consulta SIEMPRE, además de [lenguaje, patrones].
+    # Para diccionarios por proyecto (p. ej. el repo objetivo). Coma-separado en el entorno.
+    extra_collections: list[str] = []
     # Umbral de similitud para la cache semántica. 0.80 calibrado para nomic-embed-text
     # (parafraseos ~0.84, no-relacionados ~0.69); el 0.95 del diseño es irreal para este
     # modelo. Configurable con HEFISTY_SEMANTIC_THRESHOLD.
     semantic_threshold: float = 0.80
+
+    # Memoria de largo plazo (Fase 4).
+    memory_recall_k: int = 4  # recuerdos inyectados por turno
+    memory_score_min: float = 0.55  # umbral de similitud para recuperar un recuerdo
+    memory_dedup_min: float = 0.80  # por encima => se considera el mismo recuerdo (actualiza)
+    memory_confidence_min: float = 0.6  # confianza mínima del frontal para memorizar
+    memory_consolidate_every: int = 6  # turnos entre consolidaciones
+    memory_decay_days: int = 30  # sin uso y más viejo que esto => se archiva
 
     @property
     def knowledge_dir(self) -> Path:
@@ -114,7 +125,16 @@ class Settings(BaseModel):
             chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
             retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
             retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
+            extra_collections=[
+                c.strip() for c in e("HEFISTY_EXTRA_COLLECTIONS", "").split(",") if c.strip()
+            ],
             semantic_threshold=float(e("HEFISTY_SEMANTIC_THRESHOLD", "0.80")),
+            memory_recall_k=int(e("HEFISTY_MEMORY_RECALL_K", "4")),
+            memory_score_min=float(e("HEFISTY_MEMORY_SCORE_MIN", "0.55")),
+            memory_dedup_min=float(e("HEFISTY_MEMORY_DEDUP_MIN", "0.80")),
+            memory_confidence_min=float(e("HEFISTY_MEMORY_CONFIDENCE_MIN", "0.6")),
+            memory_consolidate_every=int(e("HEFISTY_MEMORY_CONSOLIDATE_EVERY", "6")),
+            memory_decay_days=int(e("HEFISTY_MEMORY_DECAY_DAYS", "30")),
         )
 
 

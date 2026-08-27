@@ -8,6 +8,7 @@ edición registra el archivo tocado. Bucle acotado a `max_rounds`.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -15,9 +16,13 @@ from typing import Any
 
 from ..config import Settings
 from ..knowledge.retrieval import Retriever
+from ..lang import collections_for, detect_language
 from ..ollama_client import OllamaClient
+from ..protections import sanitize_chunk
 from ..roles import Role
 from . import tools
+
+logger = logging.getLogger("hefisty.agentic")
 
 
 def _fn(name: str, desc: str, props: dict, required: list[str]) -> dict:
@@ -78,11 +83,28 @@ TOOLS_SPEC = [
 _TOOL_GUIDANCE = (
     "\n\nTienes herramientas para trabajar en el workspace. NO pidas rutas al usuario: "
     "descúbrelas tú con glob/grep/search_code, lee con read_range/leer_archivo y modifica "
-    "con edit (reemplazo exacto) o escribir_archivo. Cuando termines, responde con un "
-    "resumen breve de lo que hiciste."
+    "con edit (reemplazo exacto) o escribir_archivo. Para cambios extensos o refactors, "
+    "reescribe el archivo completo con escribir_archivo en vez de muchos edit pequeños. "
+    "Aplica SIEMPRE los cambios en los archivos (no solo los describas). Cuando termines, "
+    "responde con un resumen breve de lo que hiciste."
+)
+
+# Un único pase de auto-revisión antes de cerrar: reduce que el modelo se quede a medias
+# en tareas de muchas condiciones (p. ej. web-ARIA con 10 requisitos).
+_REVIEW_NUDGE = (
+    "Antes de terminar, revisa el enunciado punto por punto: ¿aplicaste en los archivos "
+    "TODOS los cambios pedidos, no solo algunos? Si algo quedó a medias o sin hacer, "
+    "corrígelo AHORA con edit/escribir_archivo. Si de verdad está todo completo, responde "
+    "solo con un resumen breve."
 )
 
 _TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+
+# Árbol de archivos que se inyecta al inicio para que el Coder no navegue carpeta por
+# carpeta (modelos como gpt-oss se rinden en árboles profundos, p. ej. src/com/x/y/ en Java).
+_MAX_TREE = 200
+_TREE_SKIP = {"node_modules", ".git", "target", "build", "dist", ".venv", "__pycache__",
+              ".idea", ".gradle", ".next", "coverage"}
 
 
 def _extract_text_toolcall(content: str) -> dict | None:
@@ -110,7 +132,7 @@ class AgenticCoder:
         settings: Settings,
         retriever: Retriever | None = None,
         repo_collection: str | None = None,
-        max_rounds: int = 8,
+        max_rounds: int = 12,
     ) -> None:
         self._ollama = ollama
         self._role = role
@@ -154,14 +176,81 @@ class AgenticCoder:
                 )
         except tools.ToolError as exc:
             return f"ERROR: {exc}"
+        except (KeyError, TypeError, ValueError) as exc:
+            # Tool call malformada (falta un argumento, tipo inválido): devuélvelo como
+            # error para que el modelo se corrija, en vez de romper todo el bucle.
+            return f"ERROR: argumento faltante o inválido: {exc}"
         return f"(herramienta desconocida: {name})"
+
+    async def _dict_context(self, task: str) -> list[dict[str, Any]]:
+        """Inyecta chunks de los diccionarios (`[lenguaje, patrones]`) como contexto de
+        sistema, igual que el path de streaming del orquestador. Sin esto, el Coder que
+        EDITA no ve los diccionarios (solo tendría `search_code` del índice del repo)."""
+        if self._retriever is None:
+            return []
+        lang = detect_language(task)
+        collections = collections_for(lang, self._s.extra_collections)
+        if not collections:
+            return []
+        try:
+            hits = await self._retriever.retrieve(task, collections)
+        except Exception as exc:  # Qdrant caído no debe romper la tarea
+            logger.warning("retrieval de diccionario falló: %s", exc)
+            return []
+        if not hits:
+            return []
+        parts = []
+        for h in hits:
+            safe, _degraded = sanitize_chunk(h.text)
+            parts.append(f"[{h.source}] ({h.section})\n{safe}")
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Contexto recuperado del diccionario. Úsalo si es relevante y CITA la "
+                    "fuente entre corchetes, p. ej. [archivo.md]. Si no aporta, ignóralo.\n\n"
+                    + "\n\n".join(parts)
+                ),
+            }
+        ]
+
+    def _workspace_tree(self) -> str:
+        """Listado (acotado) de archivos del workspace para el contexto inicial. Evita que
+        el Coder navegue carpeta por carpeta y se rinda en árboles profundos."""
+        try:
+            files = tools.glob(self._ws, "**/*")
+        except tools.ToolError:
+            return ""
+        files = [f for f in files if not (set(f.split("/")) & _TREE_SKIP)]
+        if not files:
+            return ""
+        shown = files[:_MAX_TREE]
+        listing = "\n".join(shown)
+        extra = len(files) - len(shown)
+        if extra > 0:
+            listing += f"\n… (+{extra} archivos; usa glob/grep para el resto)"
+        return listing
 
     async def run(self, task: str, on_event: Callable[[str], None] | None = None) -> dict[str, Any]:
         convo: list[dict[str, Any]] = [
             {"role": "system", "content": self._role.system_prompt + _TOOL_GUIDANCE},
-            {"role": "user", "content": task},
+            *await self._dict_context(task),
         ]
+        tree = self._workspace_tree()
+        if tree:
+            convo.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Archivos del workspace (usa estas rutas directamente; NO navegues "
+                        "carpeta por carpeta):\n" + tree
+                    ),
+                }
+            )
+        convo.append({"role": "user", "content": task})
         steps = 0
+        reviewed = False
+        last_answer = ""
         for _ in range(self._max_rounds):
             msg = await self._ollama.chat_tools(
                 self._role.model, convo, TOOLS_SPEC, keep_alive=self._s.keep_alive
@@ -173,8 +262,15 @@ class AgenticCoder:
                 if fallback is not None:
                     tool_calls = [fallback]
             if not tool_calls:
+                if content:
+                    last_answer = content
+                if not reviewed:  # un pase de auto-revisión antes de cerrar
+                    reviewed = True
+                    convo.append({"role": "assistant", "content": content})
+                    convo.append({"role": "user", "content": _REVIEW_NUDGE})
+                    continue
                 return {
-                    "answer": content,
+                    "answer": content or last_answer,
                     "touched": sorted(self._touched),
                     "steps": steps,
                 }
