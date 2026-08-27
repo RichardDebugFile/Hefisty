@@ -35,6 +35,9 @@ node_modules/
 # Dataset de identidad de Hefisty — COMPLETO privado (se publica solo la IA entrenada,
 # nunca el material de entrenamiento). Respaldar fuera de GitHub.
 roles/hefisty/dataset/
+
+# Material privado/sensible — NUNCA se sube (repo público): fuentes de terceros para dar
+# contexto o entrenar a la IA, contexto interno, credenciales. Todo va bajo secret/.
 secret/
 
 # SO / IDE
