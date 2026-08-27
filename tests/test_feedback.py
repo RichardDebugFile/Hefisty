@@ -19,7 +19,11 @@ def test_export_corrections_pairs_and_excludes_memories(tmp_path):
     # 👍 al turno 0 (coder), 👎 con corrección al turno 1 (coder), y un feedback de otro rol.
     store.add_feedback(session_id=sess.id, turn_index=0, agent="coder", model="m", vote="up")
     store.add_feedback(
-        session_id=sess.id, turn_index=1, agent="coder", model="m", vote="down",
+        session_id=sess.id,
+        turn_index=1,
+        agent="coder",
+        model="m",
+        vote="down",
         comment="faltó validar tipos",
     )
     store.add_feedback(session_id=sess.id, turn_index=0, agent="docs", model="m", vote="up")

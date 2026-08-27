@@ -11,6 +11,7 @@ from hefisty.memory import MemoryService, MemoryStore
 
 # --- fakes ---------------------------------------------------------------- #
 
+
 def _vec(text: str, dim: int = 64) -> list[float]:
     """Embedding fake: bolsa de palabras normalizada (overlap de tokens ~ coseno)."""
     v = [0.0] * dim
@@ -84,6 +85,7 @@ def _service(tmp_path, chat_json=""):
 
 # --- tests ---------------------------------------------------------------- #
 
+
 def test_memory_store_crud(tmp_path):
     store = MemoryStore(tmp_path / "m.db")
     m = store.add("prefiere inyección por constructor", "estilo")
@@ -97,13 +99,18 @@ def test_memory_store_crud(tmp_path):
 
 
 async def test_consolidate_filters_trivia(tmp_path):
-    payload = json.dumps({
-        "memories": [
-            {"fact": "su app principal se llama Kairos y está en Kotlin", "category": "proyecto",
-             "confidence": 0.95},
-            {"fact": "hoy dijo hola", "category": "trivial", "confidence": 0.2},
-        ]
-    })
+    payload = json.dumps(
+        {
+            "memories": [
+                {
+                    "fact": "su app principal se llama Kairos y está en Kotlin",
+                    "category": "proyecto",
+                    "confidence": 0.95,
+                },
+                {"fact": "hoy dijo hola", "category": "trivial", "confidence": 0.2},
+            ]
+        }
+    )
     store, svc = _service(tmp_path, payload)
     n = await svc.consolidate([{"role": "user", "content": "mi app Kairos en Kotlin"}])
     assert n == 1  # solo el de alta confianza
@@ -114,11 +121,21 @@ async def test_consolidate_filters_trivia(tmp_path):
 
 async def test_consolidate_updates_instead_of_duplicating(tmp_path):
     store, svc = _service(tmp_path)
-    svc._o.chat_json = json.dumps({"memories": [
-        {"fact": "su app principal se llama Kairos y está en Kotlin", "confidence": 0.9}]})
+    svc._o.chat_json = json.dumps(
+        {
+            "memories": [
+                {"fact": "su app principal se llama Kairos y está en Kotlin", "confidence": 0.9}
+            ]
+        }
+    )
     await svc.consolidate([{"role": "user", "content": "app Kairos"}])
-    svc._o.chat_json = json.dumps({"memories": [
-        {"fact": "su app principal se llama Atlas y está en Kotlin", "confidence": 0.9}]})
+    svc._o.chat_json = json.dumps(
+        {
+            "memories": [
+                {"fact": "su app principal se llama Atlas y está en Kotlin", "confidence": 0.9}
+            ]
+        }
+    )
     await svc.consolidate([{"role": "user", "content": "ahora se llama Atlas"}])
     mems = store.list()
     assert len(mems) == 1  # actualizó, no duplicó
@@ -127,8 +144,9 @@ async def test_consolidate_updates_instead_of_duplicating(tmp_path):
 
 async def test_recall_returns_and_marks_used(tmp_path):
     store, svc = _service(tmp_path)
-    svc._o.chat_json = json.dumps({"memories": [
-        {"fact": "prefiere inyección por constructor", "confidence": 0.9}]})
+    svc._o.chat_json = json.dumps(
+        {"memories": [{"fact": "prefiere inyección por constructor", "confidence": 0.9}]}
+    )
     await svc.consolidate([{"role": "user", "content": "inyección por constructor"}])
     facts = await svc.recall("inyección por constructor")
     assert any("constructor" in f for f in facts)

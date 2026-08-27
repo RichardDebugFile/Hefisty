@@ -15,10 +15,14 @@ class ScriptedOllama:
 
     async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
         # Al agotar el guion devuelve un cierre vacío (cubre el pase de auto-revisión).
-        msg = self._script[self.calls] if self.calls < len(self._script) else {
-            "content": "",
-            "tool_calls": [],
-        }
+        msg = (
+            self._script[self.calls]
+            if self.calls < len(self._script)
+            else {
+                "content": "",
+                "tool_calls": [],
+            }
+        )
         self.calls += 1
         return msg
 
@@ -116,10 +120,14 @@ class CapturingOllama:
     async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
-        msg = self._script[self.calls] if self.calls < len(self._script) else {
-            "content": "",
-            "tool_calls": [],
-        }
+        msg = (
+            self._script[self.calls]
+            if self.calls < len(self._script)
+            else {
+                "content": "",
+                "tool_calls": [],
+            }
+        )
         self.calls += 1
         return msg
 
