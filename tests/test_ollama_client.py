@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from hefisty.ollama_client import OllamaClient, OllamaError
+from hefisty.ollama_client import _MAX_TRIES, OllamaClient, OllamaError
 
 
 async def _noop(*_args, **_kwargs):
@@ -38,7 +38,7 @@ async def test_chat_tools_gives_up_after_max_500(monkeypatch):
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(OllamaError):
         await client.chat_tools("m", [{"role": "user", "content": "hi"}], [])
-    assert calls["n"] == 3  # _MAX_TRIES intentos y se rinde
+    assert calls["n"] == _MAX_TRIES  # agota los intentos y se rinde
     await client.aclose()
 
 

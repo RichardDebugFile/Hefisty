@@ -13,7 +13,7 @@ class ScriptedOllama:
         self._script = list(script)
         self.calls = 0
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
+    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
         # Al agotar el guion devuelve un cierre vacío (cubre el pase de auto-revisión).
         msg = (
             self._script[self.calls]
@@ -117,7 +117,7 @@ class CapturingOllama:
         self.calls = 0
         self.first_messages = None
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m"):
+    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
         msg = (
@@ -186,6 +186,42 @@ async def test_agentic_self_review_gives_second_chance(tmp_path):
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
     assert res["steps"] == 1  # la edición ocurrió tras el nudge
     assert "cambié x a 2" in res["answer"].lower()
+
+
+async def test_agentic_unknown_tool_lists_real_tools(tmp_path):
+    # gpt-oss a veces inventa tools (repo_browser.search): el error debe reencauzarlo.
+    agent = AgenticCoder(ScriptedOllama([]), load_role("coder"), tmp_path, Settings())
+    msg = await agent._exec("repo_browser.search", {"query": "x"})
+    assert "desconocida" in msg
+    assert "glob" in msg and "grep" in msg and "search_code" in msg
+
+
+class RecordingOllama(ScriptedOllama):
+    """Captura los mensajes de la 2ª llamada (tras el resultado de la tool)."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.second_msgs = None
+
+    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+        if self.calls == 1:
+            self.second_msgs = [dict(m) for m in messages]
+        return await super().chat_tools(model, messages, tools, keep_alive=keep_alive)
+
+
+async def test_agentic_truncates_huge_tool_result(tmp_path):
+    # Un archivo enorme no debe inflar el contexto (provocaba OOM/500 con VRAM justa).
+    (tmp_path / "big.txt").write_text("x" * 20000, encoding="utf-8")
+    script = [
+        {"content": "", "tool_calls": [_tc("leer_archivo", {"ruta": "big.txt"})]},
+        {"content": "leído", "tool_calls": []},
+    ]
+    ollama = RecordingOllama(script)
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run("lee big.txt", None)
+    tool_msgs = [m for m in ollama.second_msgs if m["role"] == "tool"]
+    assert tool_msgs and len(tool_msgs[0]["content"]) < 20000
+    assert "truncado" in tool_msgs[0]["content"]
 
 
 async def test_agentic_tolerates_malformed_tool_args(tmp_path):

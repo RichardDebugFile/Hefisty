@@ -80,6 +80,8 @@ TOOLS_SPEC = [
     ),
 ]
 
+_TOOL_NAMES = [t["function"]["name"] for t in TOOLS_SPEC]
+
 _TOOL_GUIDANCE = (
     "\n\nTienes herramientas para trabajar en el workspace. NO pidas rutas al usuario: "
     "descúbrelas tú con glob/grep/search_code, lee con read_range/leer_archivo y modifica "
@@ -103,6 +105,9 @@ _TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 # Árbol de archivos que se inyecta al inicio para que el Coder no navegue carpeta por
 # carpeta (modelos como gpt-oss se rinden en árboles profundos, p. ej. src/com/x/y/ en Java).
 _MAX_TREE = 200
+_MAX_TREE_CHARS = 8000
+# Tope del resultado de una tool devuelto al modelo: un archivo enorme reventaba el contexto.
+_MAX_TOOL_RESULT = 6000
 _TREE_SKIP = {
     "node_modules",
     ".git",
@@ -191,7 +196,9 @@ class AgenticCoder:
             # Tool call malformada (falta un argumento, tipo inválido): devuélvelo como
             # error para que el modelo se corrija, en vez de romper todo el bucle.
             return f"ERROR: argumento faltante o inválido: {exc}"
-        return f"(herramienta desconocida: {name})"
+        # El modelo a veces inventa nombres de tools (p. ej. `repo_browser.search`). Recuérdale
+        # las reales para que se reencauce en vez de gastar rondas con herramientas inexistentes.
+        return f"ERROR: herramienta desconocida '{name}'. Usa SOLO estas: {', '.join(_TOOL_NAMES)}."
 
     async def _dict_context(self, task: str) -> list[dict[str, Any]]:
         """Inyecta chunks de los diccionarios (`[lenguaje, patrones]`) como contexto de
@@ -235,11 +242,19 @@ class AgenticCoder:
         files = [f for f in files if not (set(f.split("/")) & _TREE_SKIP)]
         if not files:
             return ""
-        shown = files[:_MAX_TREE]
-        listing = "\n".join(shown)
-        extra = len(files) - len(shown)
+        # Acotar por nº de archivos Y por caracteres: en repos grandes el árbol domina el
+        # contexto y, con VRAM justa (15.5/16), un KV-cache grande provoca 500 (OOM) de gpt-oss.
+        lines: list[str] = []
+        used = 0
+        for f in files:
+            if len(lines) >= _MAX_TREE or used + len(f) + 1 > _MAX_TREE_CHARS:
+                break
+            lines.append(f)
+            used += len(f) + 1
+        listing = "\n".join(lines)
+        extra = len(files) - len(lines)
         if extra > 0:
-            listing += f"\n… (+{extra} archivos; usa glob/grep para el resto)"
+            listing += f"\n… (+{extra} archivos; usa glob/grep/search_code para el resto)"
         return listing
 
     async def run(self, task: str, on_event: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -264,7 +279,11 @@ class AgenticCoder:
         last_answer = ""
         for _ in range(self._max_rounds):
             msg = await self._ollama.chat_tools(
-                self._role.model, convo, TOOLS_SPEC, keep_alive=self._s.keep_alive
+                self._role.model,
+                convo,
+                TOOLS_SPEC,
+                keep_alive=self._s.keep_alive,
+                options={"num_ctx": self._s.coder_num_ctx} if self._s.coder_num_ctx else None,
             )
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls") or []
@@ -293,6 +312,14 @@ class AgenticCoder:
                 if isinstance(args, str):
                     args = json.loads(args or "{}")
                 result = await self._exec(name, args)
+                if len(result) > _MAX_TOOL_RESULT:
+                    # Un archivo enorme (leer_archivo) o un grep largo infla el contexto y, con
+                    # VRAM justa, provoca OOM (500) en la ronda siguiente. Trunca y sugiere acotar.
+                    result = (
+                        result[:_MAX_TOOL_RESULT]
+                        + f"\n… (resultado truncado a {_MAX_TOOL_RESULT} chars; "
+                        "usa read_range o grep para acotar)"
+                    )
                 steps += 1
                 if on_event is not None:
                     on_event(
