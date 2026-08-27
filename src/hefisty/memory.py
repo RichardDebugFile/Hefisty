@@ -202,13 +202,15 @@ class MemoryService:
         self._k.upsert(
             MEMORY_COLLECTION,
             [vec],
-            [{
-                "index": str(mem.id),
-                "text": mem.fact,
-                "source": str(mem.id),
-                "section": mem.category,
-                "language": "",
-            }],
+            [
+                {
+                    "index": str(mem.id),
+                    "text": mem.fact,
+                    "source": str(mem.id),
+                    "section": mem.category,
+                    "language": "",
+                }
+            ],
         )
 
     async def consolidate(self, messages: list[dict], origin: str | None = None) -> int:

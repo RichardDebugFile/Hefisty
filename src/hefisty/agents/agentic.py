@@ -103,8 +103,19 @@ _TEXT_TOOLCALL_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 # Árbol de archivos que se inyecta al inicio para que el Coder no navegue carpeta por
 # carpeta (modelos como gpt-oss se rinden en árboles profundos, p. ej. src/com/x/y/ en Java).
 _MAX_TREE = 200
-_TREE_SKIP = {"node_modules", ".git", "target", "build", "dist", ".venv", "__pycache__",
-              ".idea", ".gradle", ".next", "coverage"}
+_TREE_SKIP = {
+    "node_modules",
+    ".git",
+    "target",
+    "build",
+    "dist",
+    ".venv",
+    "__pycache__",
+    ".idea",
+    ".gradle",
+    ".next",
+    "coverage",
+}
 
 
 def _extract_text_toolcall(content: str) -> dict | None:
