@@ -238,6 +238,30 @@ async def test_agentic_tolerates_malformed_tool_args(tmp_path):
     assert res["answer"] == "corregido"
 
 
+async def test_agentic_outline_tool(tmp_path):
+    (tmp_path / "V.kt").write_text(
+        "class V {\n    fun onApprove() {}\n    val x = 1\n}\n", encoding="utf-8"
+    )
+    agent = AgenticCoder(ScriptedOllama([]), load_role("coder"), tmp_path, Settings())
+    out = await agent._exec("outline", {"ruta": "V.kt"})
+    assert "class V" in out and "fun onApprove" in out and "val x" not in out
+
+
+async def test_agentic_injects_dir_map_for_large_repo(tmp_path):
+    # >200 archivos → se inyecta el MAPA de carpetas (carpeta + nº), no la lista plana.
+    pkg = tmp_path / "app" / "approvements" / "favorites"
+    pkg.mkdir(parents=True)
+    for i in range(220):
+        (pkg / f"F{i}.kt").write_text("class F {}", encoding="utf-8")
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run("arregla algo")
+    system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
+    joined = "\n".join(system_texts)
+    assert "app/approvements/favorites/ (220)" in joined  # mapa de paquetes con conteo
+    assert "F0.kt" not in joined  # no vuelca los 220 archivos uno por uno
+
+
 async def test_agentic_injects_workspace_tree(tmp_path):
     # Archivos anidados: el Coder debe recibir el árbol y no navegar carpeta por carpeta.
     nested = tmp_path / "src" / "com" / "forja" / "pedidos"

@@ -1,6 +1,6 @@
 import pytest
 
-from hefisty.agents.tools import ToolError, edit, glob, grep, read_range
+from hefisty.agents.tools import ToolError, edit, glob, grep, outline, read_range
 
 
 def test_glob_top_and_recursive(tmp_path):
@@ -45,3 +45,71 @@ def test_edit_missing_text_fails(tmp_path):
     (tmp_path / "a.txt").write_text("hola", encoding="utf-8")
     with pytest.raises(ToolError):
         edit(tmp_path, "a.txt", "chau", "hey")
+
+
+def test_grep_skips_noise_dirs_and_binaries(tmp_path):
+    # El objetivo real: un .kt con el símbolo.
+    (tmp_path / "Target.kt").write_text("val userApprovalPercentage = 1\n", encoding="utf-8")
+    # Ruido que grep NO debe recorrer: .git binario y build/.
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "index").write_bytes(b"\x00\x01percentage\x00binary")
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "gen.kt").write_text("val userApprovalPercentage = 999\n", encoding="utf-8")
+    # Binario por extensión (imagen): fuera del allowlist.
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nPercentage")
+
+    res = grep(tmp_path, "Percentage")
+    assert res == ["Target.kt:1: val userApprovalPercentage = 1"]
+
+
+def test_grep_ignores_non_text_extension(tmp_path):
+    (tmp_path / "a.kt").write_text("match here\n", encoding="utf-8")
+    (tmp_path / "b.bin").write_text("match here\n", encoding="utf-8")
+    res = grep(tmp_path, "match")
+    assert res == ["a.kt:1: match here"]
+
+
+def test_grep_explicit_file_respected_regardless_of_extension(tmp_path):
+    # Si el modelo apunta a un archivo puntual por su ruta, se respeta aunque no sea del allowlist.
+    (tmp_path / "notes.log").write_text("boom\n", encoding="utf-8")
+    res = grep(tmp_path, "boom", "notes.log")
+    assert res == ["notes.log:1: boom"]
+
+
+def test_grep_skips_huge_files(tmp_path):
+    big = "x" * (600 * 1024) + "\nNEEDLE\n"
+    (tmp_path / "huge.txt").write_text(big, encoding="utf-8")
+    (tmp_path / "small.txt").write_text("NEEDLE\n", encoding="utf-8")
+    res = grep(tmp_path, "NEEDLE")
+    assert res == ["small.txt:1: NEEDLE"]  # el enorme se salta en el recorrido
+
+
+def test_outline_lists_declarations(tmp_path):
+    src = (
+        "package com.x\n"
+        "import y\n"
+        "class Foo {\n"
+        "    private fun bar() {}\n"
+        "    val ignored = 1\n"
+        "    override suspend fun baz(): Int = 2\n"
+        "}\n"
+        "object Singleton\n"
+        "enum class Color { RED }\n"
+    )
+    (tmp_path / "Foo.kt").write_text(src, encoding="utf-8")
+    res = outline(tmp_path, "Foo.kt")
+    joined = "\n".join(res)
+    assert "3: class Foo {" in res
+    assert any("fun bar" in r for r in res) and any("fun baz" in r for r in res)
+    assert "object Singleton" in joined and "enum class Color" in joined
+    assert "ignored" not in joined  # val/var no se listan (serían ruido)
+
+
+def test_glob_skips_noise_dirs(tmp_path):
+    (tmp_path / "a.kt").write_text("x", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref", encoding="utf-8")
+    res = glob(tmp_path, "**/*")
+    assert "a.kt" in res and not any(".git" in r for r in res)
