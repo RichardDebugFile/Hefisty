@@ -65,6 +65,9 @@ class Settings(BaseModel):
     # Directorios locales.
     workspace_dir: Path = REPO_ROOT / "workspace"
     data_dir: Path = REPO_ROOT / "data"
+    # Traza estructurada (JSONL) de cada corrida del Coder agéntico, bajo data_dir/agent_runs.
+    # Permite auditar qué buscó/leyó/editó y por qué paró. HEFISTY_AUDIT=0 la apaga.
+    audit_enabled: bool = True
 
     # Cache L1 (segundos) y límites.
     cache_ttl_chat: int = 3600
@@ -123,6 +126,7 @@ class Settings(BaseModel):
             not in ("0", "false", "no", "off"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
             data_dir=Path(e("HEFISTY_DATA_DIR", str(REPO_ROOT / "data"))),
+            audit_enabled=e("HEFISTY_AUDIT", "1").lower() not in ("0", "false", "no", "off"),
             cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
             cache_ttl_code=int(e("HEFISTY_CACHE_TTL_CODE", "600")),
             max_input_chars=int(e("HEFISTY_MAX_INPUT_CHARS", "32000")),
