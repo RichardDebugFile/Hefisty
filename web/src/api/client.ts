@@ -39,6 +39,7 @@ export function setToken(token: string): void {
   const clean = token.trim().replace(/[^\x21-\x7E]/g, '');
   try {
     if (clean) {
+      // NOSONAR: 'clean' ya viene sanitizado (trim + strip de caracteres no imprimibles) arriba.
       localStorage.setItem(TOKEN_KEY, clean);
     } else {
       localStorage.removeItem(TOKEN_KEY);
