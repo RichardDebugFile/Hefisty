@@ -37,7 +37,7 @@ jobs:
       - name: pytest
         run: |
           set +e
-          uv run pytest -q
+          uv run pytest -q  # NOSONAR: dependencias fijadas por uv.lock (build reproducible)
           code=$?
           if [ "$code" -eq 5 ]; then echo "::warning::no se recolectaron tests"; exit 0; fi
           exit "$code"
