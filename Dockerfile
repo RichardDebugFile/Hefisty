@@ -5,7 +5,7 @@ FROM node:20-alpine AS web
 WORKDIR /web
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile  # NOSONAR: lock fija versiones; vite/esbuild requieren postinstall
 COPY web/ ./
 RUN pnpm build
 
@@ -18,7 +18,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 COPY roles/ ./roles/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .  # NOSONAR: instala el propio paquete; deps resueltas de pyproject
 
 # Front compilado que el gateway sirve en '/'.
 COPY --from=web /web/dist ./web/dist

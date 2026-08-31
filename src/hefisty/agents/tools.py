@@ -105,6 +105,10 @@ def _grep_candidate(rel: Path, abs_path: Path) -> bool:
 
 
 def _resolve(workspace: Path, rel: str) -> Path:
+    # SANITIZADOR DE RUTAS: única puerta de entrada de toda ruta suministrada por el modelo.
+    # Rechaza rutas absolutas/con unidad y, tras resolver symlinks, exige que el destino quede
+    # DENTRO del workspace. Por eso los file-ops que usan su resultado están marcados # NOSONAR
+    # (path injection): el path ya viene validado aquí, no directo del dato no confiable.
     # Rechaza de entrada rutas absolutas o con unidad (C:..., \\server, /etc): el Coder
     # solo direcciona con rutas relativas dentro del workspace.
     if Path(rel).is_absolute() or PureWindowsPath(rel).drive or PureWindowsPath(rel).is_absolute():
@@ -120,13 +124,13 @@ def leer_archivo(workspace: Path, ruta: str) -> str:
     p = _resolve(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
-    return p.read_text(encoding="utf-8")
+    return p.read_text(encoding="utf-8")  # NOSONAR: path validado por _resolve()
 
 
 def escribir_archivo(workspace: Path, ruta: str, contenido: str) -> str:
     p = _resolve(workspace, ruta)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(contenido, encoding="utf-8")
+    p.write_text(contenido, encoding="utf-8")  # NOSONAR: path validado por _resolve()
     return f"escrito: {ruta} ({len(contenido)} chars)"
 
 
@@ -134,7 +138,7 @@ def listar_directorio(workspace: Path, ruta: str = ".") -> list[str]:
     p = _resolve(workspace, ruta)
     if not p.is_dir():
         raise ToolError(f"No es un directorio: {ruta}")
-    return sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())
+    return sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())  # NOSONAR: _resolve()
 
 
 # --- Navegación de código (todas confinadas al workspace) ---
@@ -182,7 +186,7 @@ def grep(workspace: Path, regex: str, ruta: str = ".", max_resultados: int = 200
         if not _inside(ws, f):  # symlink que escapa del workspace
             continue
         try:
-            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR
         except OSError:
             continue
         rel = f.relative_to(ws).as_posix()
@@ -210,7 +214,7 @@ def outline(workspace: Path, ruta: str, max_items: int = 200) -> list[str]:
     p = _resolve(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
-    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR: _resolve()
     out: list[str] = []
     for i, line in enumerate(lines, 1):
         if _DECL_RE.match(line):
@@ -225,7 +229,7 @@ def read_range(workspace: Path, ruta: str, inicio: int, fin: int) -> str:
     p = _resolve(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
-    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR: _resolve()
     inicio = max(1, inicio)
     fin = min(len(lines), fin)
     return "\n".join(f"{i}: {lines[i - 1]}" for i in range(inicio, fin + 1))
@@ -236,11 +240,11 @@ def edit(workspace: Path, ruta: str, texto_viejo: str, texto_nuevo: str) -> str:
     p = _resolve(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
-    content = p.read_text(encoding="utf-8")
+    content = p.read_text(encoding="utf-8")  # NOSONAR: path validado por _resolve()
     n = content.count(texto_viejo)
     if n == 0:
         raise ToolError(f"Texto a reemplazar no encontrado en {ruta}")
     if n > 1:
         raise ToolError(f"Texto no único en {ruta} ({n} ocurrencias); añade contexto")
-    p.write_text(content.replace(texto_viejo, texto_nuevo, 1), encoding="utf-8")
+    p.write_text(content.replace(texto_viejo, texto_nuevo, 1), encoding="utf-8")  # NOSONAR
     return f"editado: {ruta}"
