@@ -257,7 +257,7 @@ async def test_agentic_outline_tool(tmp_path):
 
 async def test_agentic_injects_dir_map_for_large_repo(tmp_path):
     # >200 archivos → se inyecta el MAPA de carpetas (carpeta + nº), no la lista plana.
-    pkg = tmp_path / "app" / "approvements" / "favorites"
+    pkg = tmp_path / "app" / "pedidos" / "detalle"
     pkg.mkdir(parents=True)
     for i in range(220):
         (pkg / f"F{i}.kt").write_text("class F {}", encoding="utf-8")
@@ -266,7 +266,7 @@ async def test_agentic_injects_dir_map_for_large_repo(tmp_path):
     await agent.run("arregla algo")
     system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
     joined = "\n".join(system_texts)
-    assert "app/approvements/favorites/ (220)" in joined  # mapa de paquetes con conteo
+    assert "app/pedidos/detalle/ (220)" in joined  # mapa de paquetes con conteo
     assert "F0.kt" not in joined  # no vuelca los 220 archivos uno por uno
 
 
