@@ -131,3 +131,15 @@ def test_grep_prefilter_keeps_anchors(tmp_path):
     assert grep(tmp_path, r"^val x") == ["a.kt:2: val x = 1"]
     assert grep(tmp_path, r"ultima$") == ["a.kt:3: ultima"]
     assert grep(tmp_path, r"^nada") == []
+
+
+def test_grep_with_context(tmp_path):
+    # contexto=N muestra el código alrededor del hit (como grep -C), marcando la línea.
+    (tmp_path / "a.kt").write_text("l1\nl2\nval target = 1\nl4\nl5\n", encoding="utf-8")
+    res = grep(tmp_path, "target", contexto=2)
+    joined = "\n".join(res)
+    assert "a.kt:3:" in joined
+    assert ">3: val target = 1" in joined  # la línea del hit va marcada
+    assert " 1: l1" in joined and " 5: l5" in joined  # contexto arriba y abajo
+    # sin contexto, formato clásico de una línea
+    assert grep(tmp_path, "target") == ["a.kt:3: val target = 1"]

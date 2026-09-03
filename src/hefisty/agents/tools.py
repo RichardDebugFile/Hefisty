@@ -239,8 +239,18 @@ def glob(workspace: Path, patron: str) -> list[str]:
     return []
 
 
-def grep(workspace: Path, regex: str, ruta: str = ".", max_resultados: int = 200) -> list[str]:
-    """Líneas que casan `regex` bajo `ruta`. Formato: `archivo:linea: contenido`."""
+def grep(
+    workspace: Path,
+    regex: str,
+    ruta: str = ".",
+    max_resultados: int = 200,
+    contexto: int = 0,
+) -> list[str]:
+    """Líneas que casan `regex` bajo `ruta`. Formato: `archivo:linea: contenido`.
+
+    Con `contexto=N` devuelve además las N líneas de alrededor de cada hit (como `grep -C`),
+    para ver el código que rodea al match sin una segunda llamada a read_range: el modelo
+    acertaba el archivo pero fallaba la ventana al leer."""
     base = _resolve(workspace, ruta)
     ws = Path(workspace).resolve()
     try:
@@ -271,11 +281,20 @@ def grep(workspace: Path, regex: str, ruta: str = ".", max_resultados: int = 200
         if not prefilter.search(content):
             continue
         rel = f.relative_to(ws).as_posix()
-        for i, line in enumerate(content.splitlines(), 1):
-            if pat.search(line):
+        lines = content.splitlines()
+        for i, line in enumerate(lines, 1):
+            if not pat.search(line):
+                continue
+            if contexto > 0:
+                lo, hi = max(1, i - contexto), min(len(lines), i + contexto)
+                out.append(f"{rel}:{i}:")
+                for j in range(lo, hi + 1):
+                    marca = ">" if j == i else " "
+                    out.append(f"  {marca}{j}: {lines[j - 1][:200]}")
+            else:
                 out.append(f"{rel}:{i}: {line.strip()[:200]}")
-                if len(out) >= max_resultados:
-                    return out
+            if len(out) >= max_resultados:
+                return out
     return out
 
 

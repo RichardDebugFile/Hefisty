@@ -50,8 +50,10 @@ TOOLS_SPEC = [
     ),
     _fn(
         "grep",
-        "Busca una regex en archivos del workspace (archivo:linea: contenido).",
-        {"regex": _STR, "ruta": _STR},
+        "Busca una regex en archivos del workspace (archivo:linea: contenido). Con "
+        "contexto=N devuelve N líneas alrededor de cada hit (como grep -C): úsalo para ver "
+        "el código que rodea al match sin tener que adivinar la ventana de read_range.",
+        {"regex": _STR, "ruta": _STR, "contexto": _INT},
         ["regex"],
     ),
     _fn(
@@ -108,6 +110,8 @@ _TOOL_GUIDANCE = (
     "3. `search_code` es APROXIMADO (semántico): devuelve archivos de TEMA parecido, a menudo el "
     "equivocado. Úsalo SOLO si no sabes qué identificador buscar, y como MUCHO una o dos veces; "
     "luego grepea un símbolo concreto de esos archivos. NUNCA encadenes varias search_code.\n"
+    "3b. Usa `grep` con `contexto=5`: te muestra el código ALREDEDOR de cada hit en la misma "
+    "llamada. Así ves la función y sus vecinas sin adivinar la ventana de read_range.\n"
     "4. grep te da archivo:LÍNEA. Ve DIRECTO ahí: `read_range` en esa línea (±25) o usa `outline` "
     "para ver las declaraciones del archivo y saltar a la función. NO re-busques lo que grep ya "
     "te dio: cuando tengas la línea, LÉELA y EDÍTALA. grep/glob ya IGNORAN .git/, build/, .gradle/."
@@ -180,7 +184,7 @@ class AgenticCoder:
         settings: Settings,
         retriever: Retriever | None = None,
         repo_collection: str | None = None,
-        max_rounds: int = 16,
+        max_rounds: int = 20,
     ) -> None:
         self._ollama = ollama
         self._role = role
@@ -196,7 +200,12 @@ class AgenticCoder:
             if name == "glob":
                 return "\n".join(tools.glob(self._ws, args["patron"])) or "(sin resultados)"
             if name == "grep":
-                res = tools.grep(self._ws, args["regex"], args.get("ruta", "."))
+                res = tools.grep(
+                    self._ws,
+                    args["regex"],
+                    args.get("ruta", "."),
+                    contexto=int(args.get("contexto") or 0),
+                )
                 return "\n".join(res) or "(sin resultados)"
             if name == "read_range":
                 return tools.read_range(
