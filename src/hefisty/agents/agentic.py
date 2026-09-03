@@ -334,7 +334,7 @@ class AgenticCoder:
 
     def _dir_map(self, files: list[str]) -> str:
         """Mapa de carpetas (paquetes) con su conteo de archivos, ordenado y acotado.
-        Panorama de un repo grande: `.../approvements/viewmodel/favorites/ (5)`."""
+        Panorama de un repo grande: `.../pedidos/viewmodel/detalle/ (5)`."""
         counts: dict[str, int] = {}
         for f in files:
             parent = f.rsplit("/", 1)[0] if "/" in f else "."

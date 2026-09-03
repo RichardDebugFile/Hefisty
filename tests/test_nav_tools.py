@@ -49,19 +49,19 @@ def test_edit_missing_text_fails(tmp_path):
 
 def test_grep_skips_noise_dirs_and_binaries(tmp_path):
     # El objetivo real: un .kt con el símbolo.
-    (tmp_path / "Target.kt").write_text("val userApprovalPercentage = 1\n", encoding="utf-8")
+    (tmp_path / "Target.kt").write_text("val userScorePercentage = 1\n", encoding="utf-8")
     # Ruido que grep NO debe recorrer: .git binario y build/.
     git = tmp_path / ".git"
     git.mkdir()
     (git / "index").write_bytes(b"\x00\x01percentage\x00binary")
     build = tmp_path / "build"
     build.mkdir()
-    (build / "gen.kt").write_text("val userApprovalPercentage = 999\n", encoding="utf-8")
+    (build / "gen.kt").write_text("val userScorePercentage = 999\n", encoding="utf-8")
     # Binario por extensión (imagen): fuera del allowlist.
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nPercentage")
 
     res = grep(tmp_path, "Percentage")
-    assert res == ["Target.kt:1: val userApprovalPercentage = 1"]
+    assert res == ["Target.kt:1: val userScorePercentage = 1"]
 
 
 def test_grep_ignores_non_text_extension(tmp_path):
@@ -123,12 +123,12 @@ def test_glob_skips_noise_dirs(tmp_path):
 
 def test_glob_tolerant_variants(tmp_path):
     # El modelo escribe patrones con semántica de shell; pathlib devolvía vacío en silencio.
-    pkg = tmp_path / "app" / "approvements" / "favorites"
+    pkg = tmp_path / "app" / "pedidos" / "detalle"
     pkg.mkdir(parents=True)
     (pkg / "Utils.kt").write_text("class U", encoding="utf-8")
-    assert glob(tmp_path, "**/approvements/**") == ["app/approvements/favorites/Utils.kt"]
-    assert glob(tmp_path, "approvements/**") == ["app/approvements/favorites/Utils.kt"]
-    assert "app/approvements/favorites/Utils.kt" in glob(tmp_path, "Utils.kt")
+    assert glob(tmp_path, "**/pedidos/**") == ["app/pedidos/detalle/Utils.kt"]
+    assert glob(tmp_path, "pedidos/**") == ["app/pedidos/detalle/Utils.kt"]
+    assert "app/pedidos/detalle/Utils.kt" in glob(tmp_path, "Utils.kt")
 
 
 def test_grep_prefilter_keeps_anchors(tmp_path):
@@ -177,7 +177,7 @@ def test_har_lists_and_details(tmp_path):
                 {
                     "request": {
                         "method": "POST",
-                        "url": "https://x/api/v1/accounts/corporate/aliases/create-own-bank",
+                        "url": "https://x/api/v1/recursos/crear",
                         "headers": [{"name": "component", "value": "abc123"}],
                         "postData": {"text": '{"transactionCode":"12"}'},
                     },
@@ -188,8 +188,8 @@ def test_har_lists_and_details(tmp_path):
     }
     (tmp_path / "web.har").write_text(_json.dumps(har_doc), encoding="utf-8")
 
-    listado = har(tmp_path, "web.har", filtro="create-own-bank")
-    assert "#1  POST 200" in listado and "corporate/aliases" in listado
+    listado = har(tmp_path, "web.har", filtro="recursos/crear")
+    assert "#1  POST 200" in listado and "api/v1/recursos" in listado
     assert "otra" not in listado  # el filtro descarta las demás
 
     detalle = har(tmp_path, "web.har", indice=1)
