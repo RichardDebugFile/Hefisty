@@ -58,7 +58,10 @@ class Settings(BaseModel):
     coder_num_ctx: int = 8192
     # Esfuerzo de razonamiento del Coder en modelos que lo soportan (gpt-oss: low|medium|high).
     # Va como campo `think` de la petición. Cadena vacía = no enviarlo (default del modelo).
-    coder_reasoning: str = "high"
+    # "medium" por defecto: con "high" el razonamiento largo desbordó num_ctx=16384 en 20
+    # rondas y Ollama truncó el enunciado original (el modelo acabó diciendo "no recibí
+    # instrucciones"). Subir a "high" solo con num_ctx holgado.
+    coder_reasoning: str = "medium"
     # Tope de rondas del bucle agéntico. Las tareas multi-paso (leer evidencia + localizar +
     # editar) necesitan más presupuesto que un fix puntual. HEFISTY_CODER_MAX_ROUNDS.
     coder_max_rounds: int = 20
@@ -128,7 +131,7 @@ class Settings(BaseModel):
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
             coder_num_ctx=int(e("HEFISTY_CODER_NUM_CTX", "8192")),
-            coder_reasoning=e("HEFISTY_CODER_REASONING", "high").strip(),
+            coder_reasoning=e("HEFISTY_CODER_REASONING", "medium").strip(),
             coder_max_rounds=int(e("HEFISTY_CODER_MAX_ROUNDS", "20")),
             unload_coder_after_turn=e("HEFISTY_UNLOAD_CODER", "1").lower()
             not in ("0", "false", "no", "off"),

@@ -135,6 +135,11 @@ _REVIEW_NUDGE = (
     "solo con un resumen breve."
 )
 
+# Los nudges se añaden como mensajes de usuario. Si el contexto se trunca (razonamiento largo +
+# muchas rondas), el enunciado original se cae y el nudge pasa a ser "la petición": el modelo
+# respondió "no se recibieron instrucciones específicas". Por eso TODO nudge re-ancla la tarea.
+_TASK_ANCHOR = "RECORDATORIO — TAREA ORIGINAL (es lo único que debes resolver):\n{task}\n\n"
+
 _SEARCH_LOOP_NUDGE = (
     "PARA. Llevas varias búsquedas semánticas (search_code) seguidas sin leer ni editar nada. "
     "search_code es APROXIMADO y te está devolviendo archivos de tema parecido, no el correcto. "
@@ -409,7 +414,9 @@ class AgenticCoder:
                 if not reviewed:  # un pase de auto-revisión antes de cerrar
                     reviewed = True
                     convo.append({"role": "assistant", "content": content})
-                    convo.append({"role": "user", "content": _REVIEW_NUDGE})
+                    convo.append(
+                        {"role": "user", "content": _TASK_ANCHOR.format(task=task) + _REVIEW_NUDGE}
+                    )
                     continue
                 answer = content or last_answer
                 rec.run_end(answer, sorted(self._touched), steps, "completed")
@@ -470,7 +477,9 @@ class AgenticCoder:
             # leer ni editar, se queda dando vueltas entre archivos de nombre parecido (observado
             # en repos grandes). Empújalo a grep exacto + read_range.
             if search_streak >= 3:
-                convo.append({"role": "user", "content": _SEARCH_LOOP_NUDGE})
+                convo.append(
+                    {"role": "user", "content": _TASK_ANCHOR.format(task=task) + _SEARCH_LOOP_NUDGE}
+                )
                 rec.note("anti_loop_nudge", search_streak=search_streak)
                 search_streak = 0
         answer = "(se alcanzó el límite de pasos sin respuesta final)"

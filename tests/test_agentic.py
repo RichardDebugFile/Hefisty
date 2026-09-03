@@ -118,12 +118,14 @@ class CapturingOllama:
         self._script = list(script)
         self.calls = 0
         self.first_messages = None
+        self.last_messages = []
 
     async def chat_tools(
         self, model, messages, tools, *, keep_alive="10m", options=None, think=None
     ):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
+        self.last_messages = [dict(m) for m in messages]
         msg = (
             self._script[self.calls]
             if self.calls < len(self._script)
@@ -278,3 +280,19 @@ async def test_agentic_injects_workspace_tree(tmp_path):
     await agent.run("arregla el servicio")
     system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
     assert any("src/com/forja/pedidos/Servicio.java" in t for t in system_texts)
+
+
+async def test_nudges_reanchor_the_task(tmp_path):
+    # Si el contexto se trunca, el enunciado se pierde y el nudge pasaría a ser "la petición"
+    # (el modelo llegó a responder "no se recibieron instrucciones"). Todo nudge lo re-ancla.
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    tarea = "arregla el calculo del porcentaje"
+    script = [{"content": "listo sin editar", "tool_calls": []}]  # dispara el nudge de revisión
+    ollama = CapturingOllama(script)
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run(tarea, None)
+    nudges = [
+        m for m in ollama.last_messages if m["role"] == "user" and "TAREA ORIGINAL" in m["content"]
+    ]
+    assert nudges, "el nudge debe re-anclar la tarea"
+    assert tarea in nudges[0]["content"]
