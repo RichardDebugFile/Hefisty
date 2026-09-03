@@ -13,7 +13,9 @@ class ScriptedOllama:
         self._script = list(script)
         self.calls = 0
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         # Al agotar el guion devuelve un cierre vacío (cubre el pase de auto-revisión).
         msg = (
             self._script[self.calls]
@@ -116,10 +118,14 @@ class CapturingOllama:
         self._script = list(script)
         self.calls = 0
         self.first_messages = None
+        self.last_messages = []
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
+        self.last_messages = [dict(m) for m in messages]
         msg = (
             self._script[self.calls]
             if self.calls < len(self._script)
@@ -203,10 +209,12 @@ class RecordingOllama(ScriptedOllama):
         super().__init__(script)
         self.second_msgs = None
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         if self.calls == 1:
             self.second_msgs = [dict(m) for m in messages]
-        return await super().chat_tools(model, messages, tools, keep_alive=keep_alive)
+        return await super().chat_tools(model, messages, tools, keep_alive=keep_alive, think=think)
 
 
 async def test_agentic_truncates_huge_tool_result(tmp_path):
@@ -238,6 +246,30 @@ async def test_agentic_tolerates_malformed_tool_args(tmp_path):
     assert res["answer"] == "corregido"
 
 
+async def test_agentic_outline_tool(tmp_path):
+    (tmp_path / "V.kt").write_text(
+        "class V {\n    fun onApprove() {}\n    val x = 1\n}\n", encoding="utf-8"
+    )
+    agent = AgenticCoder(ScriptedOllama([]), load_role("coder"), tmp_path, Settings())
+    out = await agent._exec("outline", {"ruta": "V.kt"})
+    assert "class V" in out and "fun onApprove" in out and "val x" not in out
+
+
+async def test_agentic_injects_dir_map_for_large_repo(tmp_path):
+    # >200 archivos → se inyecta el MAPA de carpetas (carpeta + nº), no la lista plana.
+    pkg = tmp_path / "app" / "approvements" / "favorites"
+    pkg.mkdir(parents=True)
+    for i in range(220):
+        (pkg / f"F{i}.kt").write_text("class F {}", encoding="utf-8")
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run("arregla algo")
+    system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
+    joined = "\n".join(system_texts)
+    assert "app/approvements/favorites/ (220)" in joined  # mapa de paquetes con conteo
+    assert "F0.kt" not in joined  # no vuelca los 220 archivos uno por uno
+
+
 async def test_agentic_injects_workspace_tree(tmp_path):
     # Archivos anidados: el Coder debe recibir el árbol y no navegar carpeta por carpeta.
     nested = tmp_path / "src" / "com" / "forja" / "pedidos"
@@ -248,3 +280,19 @@ async def test_agentic_injects_workspace_tree(tmp_path):
     await agent.run("arregla el servicio")
     system_texts = [m["content"] for m in ollama.first_messages if m["role"] == "system"]
     assert any("src/com/forja/pedidos/Servicio.java" in t for t in system_texts)
+
+
+async def test_nudges_reanchor_the_task(tmp_path):
+    # Si el contexto se trunca, el enunciado se pierde y el nudge pasaría a ser "la petición"
+    # (el modelo llegó a responder "no se recibieron instrucciones"). Todo nudge lo re-ancla.
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    tarea = "arregla el calculo del porcentaje"
+    script = [{"content": "listo sin editar", "tool_calls": []}]  # dispara el nudge de revisión
+    ollama = CapturingOllama(script)
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run(tarea, None)
+    nudges = [
+        m for m in ollama.last_messages if m["role"] == "user" and "TAREA ORIGINAL" in m["content"]
+    ]
+    assert nudges, "el nudge debe re-anclar la tarea"
+    assert tarea in nudges[0]["content"]

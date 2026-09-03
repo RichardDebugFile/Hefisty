@@ -436,11 +436,12 @@ def code_cmd(
         s,
         retriever=Retriever(s, ollama, KnowledgeStore(s.qdrant_url)),
         repo_collection=collection_name(s.workspace_dir),
+        max_rounds=s.coder_max_rounds,
     )
 
     def on_event(ev: str) -> None:
         if verbose:
-            typer.secho(f"  · {ev}", fg=typer.colors.BLUE, err=True)
+            typer.secho(f"  > {ev}", fg=typer.colors.BLUE, err=True)
 
     async def _go() -> dict:
         try:
@@ -454,6 +455,8 @@ def code_cmd(
         typer.secho(
             f"archivos tocados: {', '.join(res['touched'])}", fg=typer.colors.GREEN, err=True
         )
+    if res.get("audit"):
+        typer.secho(f"traza (audit): {res['audit']}", fg=typer.colors.CYAN, err=True)
 
 
 if __name__ == "__main__":

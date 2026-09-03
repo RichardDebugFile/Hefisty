@@ -94,8 +94,13 @@ class OllamaClient:
         *,
         keep_alive: str | int = "10m",
         options: dict[str, Any] | None = None,
+        think: str | None = None,
     ) -> dict[str, Any]:
-        """Chat con function calling. Devuelve el mensaje (con `content` y `tool_calls`)."""
+        """Chat con function calling. Devuelve el mensaje (con `content` y `tool_calls`).
+
+        `think` fija el esfuerzo de razonamiento de los modelos que lo soportan (gpt-oss:
+        "low"/"medium"/"high"). Va como campo de primer nivel, NO dentro de `options`.
+        La respuesta trae además `thinking`, que registramos en la traza de auditoría."""
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -105,6 +110,8 @@ class OllamaClient:
         }
         if options:
             payload["options"] = options
+        if think:
+            payload["think"] = think
         data = await self._post_chat(payload, "chat_tools")
         return data.get("message", {})
 

@@ -56,6 +56,15 @@ class Settings(BaseModel):
     # crezca sin límite y provoque OOM (500) en GPUs de VRAM justa (16 GB con modelo de ~13 GB):
     # Ollama trunca el contexto viejo en vez de fallar. 0 = usar el default del modelo.
     coder_num_ctx: int = 8192
+    # Esfuerzo de razonamiento del Coder en modelos que lo soportan (gpt-oss: low|medium|high).
+    # Va como campo `think` de la petición. Cadena vacía = no enviarlo (default del modelo).
+    # "medium" por defecto: con "high" el razonamiento largo desbordó num_ctx=16384 en 20
+    # rondas y Ollama truncó el enunciado original (el modelo acabó diciendo "no recibí
+    # instrucciones"). Subir a "high" solo con num_ctx holgado.
+    coder_reasoning: str = "medium"
+    # Tope de rondas del bucle agéntico. Las tareas multi-paso (leer evidencia + localizar +
+    # editar) necesitan más presupuesto que un fix puntual. HEFISTY_CODER_MAX_ROUNDS.
+    coder_max_rounds: int = 20
     # Descargar el modelo grande (Coder) de VRAM al terminar el turno/cadena, en vez de
     # dejarlo residente `keep_alive` minutos ocupando ~13 GB sin trabajar. Con presupuesto
     # de VRAM ajustado (15.46/16) conviene True; recarga en 1-3 s desde el page cache de RAM
@@ -65,6 +74,9 @@ class Settings(BaseModel):
     # Directorios locales.
     workspace_dir: Path = REPO_ROOT / "workspace"
     data_dir: Path = REPO_ROOT / "data"
+    # Traza estructurada (JSONL) de cada corrida del Coder agéntico, bajo data_dir/agent_runs.
+    # Permite auditar qué buscó/leyó/editó y por qué paró. HEFISTY_AUDIT=0 la apaga.
+    audit_enabled: bool = True
 
     # Cache L1 (segundos) y límites.
     cache_ttl_chat: int = 3600
@@ -119,10 +131,13 @@ class Settings(BaseModel):
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
             coder_num_ctx=int(e("HEFISTY_CODER_NUM_CTX", "8192")),
+            coder_reasoning=e("HEFISTY_CODER_REASONING", "medium").strip(),
+            coder_max_rounds=int(e("HEFISTY_CODER_MAX_ROUNDS", "20")),
             unload_coder_after_turn=e("HEFISTY_UNLOAD_CODER", "1").lower()
             not in ("0", "false", "no", "off"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
             data_dir=Path(e("HEFISTY_DATA_DIR", str(REPO_ROOT / "data"))),
+            audit_enabled=e("HEFISTY_AUDIT", "1").lower() not in ("0", "false", "no", "off"),
             cache_ttl_chat=int(e("HEFISTY_CACHE_TTL_CHAT", "3600")),
             cache_ttl_code=int(e("HEFISTY_CACHE_TTL_CODE", "600")),
             max_input_chars=int(e("HEFISTY_MAX_INPUT_CHARS", "32000")),

@@ -21,6 +21,9 @@ datasets/corrections/
 logs/
 *.log
 
+# Bitácora privada del asistente (notas de sesión, sobrevive a faltas de contexto)
+bitacora/
+
 # Entornos y caches
 .venv/
 __pycache__/
