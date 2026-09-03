@@ -253,6 +253,10 @@ def grep(
     acertaba el archivo pero fallaba la ventana al leer."""
     base = _resolve(workspace, ruta)
     ws = Path(workspace).resolve()
+    # Una ruta inexistente (typo del modelo) devolvía "(sin resultados)": una señal FALSA que le
+    # hace concluir "aquí no hay nada" y seguir por mal camino. Debe fallar ruidosamente.
+    if not base.exists():
+        raise ToolError(f"No existe la ruta: {ruta}")
     try:
         pat = re.compile(regex)
     except re.error as exc:

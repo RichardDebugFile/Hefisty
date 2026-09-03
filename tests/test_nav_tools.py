@@ -143,3 +143,11 @@ def test_grep_with_context(tmp_path):
     assert " 1: l1" in joined and " 5: l5" in joined  # contexto arriba y abajo
     # sin contexto, formato clásico de una línea
     assert grep(tmp_path, "target") == ["a.kt:3: val target = 1"]
+
+
+def test_grep_nonexistent_path_raises(tmp_path):
+    # Un typo en la ruta devolvía "(sin resultados)" -> señal falsa. Debe fallar ruidosamente.
+    (tmp_path / "a.kt").write_text("hit\n", encoding="utf-8")
+    with pytest.raises(ToolError):
+        grep(tmp_path, "hit", "no/existe/esta/ruta")
+    assert grep(tmp_path, "hit") == ["a.kt:1: hit"]  # la ruta buena sigue funcionando
