@@ -7,6 +7,7 @@ queda para la Fase 3.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path, PureWindowsPath
 
@@ -150,17 +151,92 @@ def _inside(ws: Path, p: Path) -> bool:
     return rp == ws or ws in rp.parents
 
 
+def _walk_files(base: Path, ws: Path) -> list[Path]:
+    """Archivos bajo `base`, **podando en el recorrido** las carpetas de ruido.
+
+    Clave para el rendimiento: `rglob("*")` enumera TODO y filtra después. En el repo objetivo
+    eso son 91.708 rutas, de las cuales `build/` aporta 88.400 (96%). Podando con os.walk no
+    se desciende siquiera a esas carpetas.
+    """
+    out: list[Path] = []
+    for root, dirs, filenames in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]  # poda in-place: no desciende
+        rootp = Path(root)
+        for fn in filenames:
+            p = rootp / fn
+            if _inside(ws, p):  # descarta symlinks que escapen del workspace
+                out.append(p)
+    return out
+
+
+def _glob_to_regex(patron: str) -> re.Pattern[str]:
+    """Traduce un patrón glob a regex sobre la ruta relativa posix.
+    `**` cruza separadores, `*`/`?` no. Permite casar sin recorrer el árbol de nuevo."""
+    parts = patron.split("/")
+    chunks: list[str] = []
+    for i, seg in enumerate(parts):
+        last = i == len(parts) - 1
+        if seg == "**":
+            chunks.append(".*" if last else "(?:.*/)?")
+            continue
+        seg_re = ""
+        for ch in seg:
+            if ch == "*":
+                seg_re += "[^/]*"
+            elif ch == "?":
+                seg_re += "[^/]"
+            else:
+                seg_re += re.escape(ch)
+        chunks.append(seg_re if last else seg_re + "/")
+    return re.compile("^" + "".join(chunks) + "$")
+
+
+def _glob_once(ws: Path, patron: str, files: list[Path] | None = None) -> list[str]:
+    try:
+        rx = _glob_to_regex(patron)
+    except re.error:
+        return []
+    if files is None:
+        files = _walk_files(ws, ws)
+    out: list[str] = []
+    for p in files:
+        rel = p.relative_to(ws).as_posix()
+        if rx.match(rel):
+            out.append(rel)
+    return sorted(out)
+
+
+def _glob_variants(patron: str) -> list[str]:
+    """Variantes tolerantes del patrón. El modelo escribe patrones con semántica de shell
+    (`**/dir/**`, `*dir*/*sub*`) que pathlib expande distinto y devuelve vacío en silencio,
+    gastando rondas. Se reintenta con las formas que casi siempre son lo que quería."""
+    alts: list[str] = []
+    p = patron.rstrip("/")
+    if p.endswith("/**"):  # "a/**" en pathlib no incluye los archivos: hace falta "/**/*"
+        alts.append(p + "/*")
+    if not p.startswith("**/"):  # buscar en cualquier profundidad, no solo en la raíz
+        alts.append("**/" + p)
+        if p.endswith("/**"):
+            alts.append("**/" + p + "/*")
+    if "/" not in p and not p.startswith("*"):  # nombre suelto -> por todo el árbol
+        alts.append(f"**/*{p}*")
+    return alts
+
+
 def glob(workspace: Path, patron: str) -> list[str]:
     """Rutas de archivo (relativas) que casan el patrón glob dentro del workspace."""
     if ".." in patron or patron.startswith(("/", "\\")) or PureWindowsPath(patron).drive:
         raise ToolError(f"Patrón no permitido: {patron}")
     ws = Path(workspace).resolve()
-    # Excluye symlinks que apunten fuera del workspace y carpetas de ruido (.git/build/…).
-    return sorted(
-        rel.as_posix()
-        for p in ws.glob(patron)
-        if p.is_file() and _inside(ws, p) and not _skipped(rel := p.relative_to(ws))
-    )
+    files = _walk_files(ws, ws)  # un solo recorrido podado, reutilizado por las variantes
+    out = _glob_once(ws, patron, files)
+    if out:
+        return out
+    for alt in _glob_variants(patron):  # reintento tolerante antes de rendirse
+        out = _glob_once(ws, alt, files)
+        if out:
+            return out
+    return []
 
 
 def grep(workspace: Path, regex: str, ruta: str = ".", max_resultados: int = 200) -> list[str]:
@@ -175,22 +251,27 @@ def grep(workspace: Path, regex: str, ruta: str = ".", max_resultados: int = 200
         # Archivo puntual pedido por su ruta: respétalo tal cual (el modelo eligió).
         files = [base]
     else:
-        # Recorrido: filtra ruido/binarios/gigantes por extensión y tamaño (rápido, sin abrir).
-        files = [
-            p
-            for p in base.rglob("*")
-            if p.is_file() and _inside(ws, p) and _grep_candidate(p.relative_to(ws), p)
-        ]
+        # Recorrido PODADO (no desciende a build/.git/…) + filtro por extensión y tamaño.
+        files = [p for p in _walk_files(base, ws) if _grep_candidate(p.relative_to(ws), p)]
+    # Pre-filtro: una sola pasada de regex sobre TODO el contenido (con MULTILINE, para que
+    # ^/$ conserven la semántica por línea). Solo si hay match se parte en líneas. Sin esto
+    # eran millones de `pat.search(line)` — un grep sin resultados sobre ~1700 .kt tardaba 75 s.
+    try:
+        prefilter = re.compile(regex, re.MULTILINE)
+    except re.error:  # ya validada arriba; por si el flag cambia la compilación
+        prefilter = pat
     out: list[str] = []
     for f in files:
         if not _inside(ws, f):  # symlink que escapa del workspace
             continue
         try:
-            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR
+            content = f.read_text(encoding="utf-8", errors="replace")  # NOSONAR
         except OSError:
             continue
+        if not prefilter.search(content):
+            continue
         rel = f.relative_to(ws).as_posix()
-        for i, line in enumerate(lines, 1):
+        for i, line in enumerate(content.splitlines(), 1):
             if pat.search(line):
                 out.append(f"{rel}:{i}: {line.strip()[:200]}")
                 if len(out) >= max_resultados:

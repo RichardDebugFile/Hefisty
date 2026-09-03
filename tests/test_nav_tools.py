@@ -113,3 +113,21 @@ def test_glob_skips_noise_dirs(tmp_path):
     (tmp_path / ".git" / "HEAD").write_text("ref", encoding="utf-8")
     res = glob(tmp_path, "**/*")
     assert "a.kt" in res and not any(".git" in r for r in res)
+
+
+def test_glob_tolerant_variants(tmp_path):
+    # El modelo escribe patrones con semántica de shell; pathlib devolvía vacío en silencio.
+    pkg = tmp_path / "app" / "approvements" / "favorites"
+    pkg.mkdir(parents=True)
+    (pkg / "Utils.kt").write_text("class U", encoding="utf-8")
+    assert glob(tmp_path, "**/approvements/**") == ["app/approvements/favorites/Utils.kt"]
+    assert glob(tmp_path, "approvements/**") == ["app/approvements/favorites/Utils.kt"]
+    assert "app/approvements/favorites/Utils.kt" in glob(tmp_path, "Utils.kt")
+
+
+def test_grep_prefilter_keeps_anchors(tmp_path):
+    # El pre-filtro usa MULTILINE: ^/$ deben seguir casando por línea, no solo al inicio.
+    (tmp_path / "a.kt").write_text("primera\nval x = 1\nultima\n", encoding="utf-8")
+    assert grep(tmp_path, r"^val x") == ["a.kt:2: val x = 1"]
+    assert grep(tmp_path, r"ultima$") == ["a.kt:3: ultima"]
+    assert grep(tmp_path, r"^nada") == []
