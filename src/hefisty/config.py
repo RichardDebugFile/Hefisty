@@ -56,6 +56,12 @@ class Settings(BaseModel):
     # crezca sin límite y provoque OOM (500) en GPUs de VRAM justa (16 GB con modelo de ~13 GB):
     # Ollama trunca el contexto viejo en vez de fallar. 0 = usar el default del modelo.
     coder_num_ctx: int = 8192
+    # Esfuerzo de razonamiento del Coder en modelos que lo soportan (gpt-oss: low|medium|high).
+    # Va como campo `think` de la petición. Cadena vacía = no enviarlo (default del modelo).
+    coder_reasoning: str = "high"
+    # Tope de rondas del bucle agéntico. Las tareas multi-paso (leer evidencia + localizar +
+    # editar) necesitan más presupuesto que un fix puntual. HEFISTY_CODER_MAX_ROUNDS.
+    coder_max_rounds: int = 20
     # Descargar el modelo grande (Coder) de VRAM al terminar el turno/cadena, en vez de
     # dejarlo residente `keep_alive` minutos ocupando ~13 GB sin trabajar. Con presupuesto
     # de VRAM ajustado (15.46/16) conviene True; recarga en 1-3 s desde el page cache de RAM
@@ -122,6 +128,8 @@ class Settings(BaseModel):
             model_embed=e("HEFISTY_MODEL_EMBED", "nomic-embed-text"),
             keep_alive=e("HEFISTY_KEEP_ALIVE", "10m"),
             coder_num_ctx=int(e("HEFISTY_CODER_NUM_CTX", "8192")),
+            coder_reasoning=e("HEFISTY_CODER_REASONING", "high").strip(),
+            coder_max_rounds=int(e("HEFISTY_CODER_MAX_ROUNDS", "20")),
             unload_coder_after_turn=e("HEFISTY_UNLOAD_CODER", "1").lower()
             not in ("0", "false", "no", "off"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),

@@ -13,7 +13,9 @@ class ScriptedOllama:
         self._script = list(script)
         self.calls = 0
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         # Al agotar el guion devuelve un cierre vacío (cubre el pase de auto-revisión).
         msg = (
             self._script[self.calls]
@@ -117,7 +119,9 @@ class CapturingOllama:
         self.calls = 0
         self.first_messages = None
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         if self.calls == 0:
             self.first_messages = [dict(m) for m in messages]
         msg = (
@@ -203,10 +207,12 @@ class RecordingOllama(ScriptedOllama):
         super().__init__(script)
         self.second_msgs = None
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         if self.calls == 1:
             self.second_msgs = [dict(m) for m in messages]
-        return await super().chat_tools(model, messages, tools, keep_alive=keep_alive)
+        return await super().chat_tools(model, messages, tools, keep_alive=keep_alive, think=think)
 
 
 async def test_agentic_truncates_huge_tool_result(tmp_path):

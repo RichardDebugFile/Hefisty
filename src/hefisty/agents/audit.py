@@ -79,6 +79,11 @@ class RunRecorder:
         if content:
             self._write("assistant", step=step, content=_trim(content, 2000))
 
+    def thinking(self, step: int, text: str) -> None:
+        """Cadena de razonamiento del modelo (gpt-oss la devuelve aparte del content)."""
+        if text:
+            self._write("thinking", step=step, text=_trim(text, 2000))
+
     def tool(
         self, step: int, name: str, args: dict[str, Any], result: str, ok: bool, ms: int
     ) -> None:

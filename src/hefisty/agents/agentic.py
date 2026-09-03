@@ -390,8 +390,13 @@ class AgenticCoder:
                 TOOLS_SPEC,
                 keep_alive=self._s.keep_alive,
                 options={"num_ctx": self._s.coder_num_ctx} if self._s.coder_num_ctx else None,
+                think=self._s.coder_reasoning or None,
             )
             content = msg.get("content", "")
+            # gpt-oss devuelve su cadena de razonamiento aparte: guardarla hace la traza
+            # mucho más útil para entender POR QUÉ eligió cada herramienta.
+            if msg.get("thinking"):
+                rec.thinking(steps, str(msg["thinking"]))
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
                 fallback = _extract_text_toolcall(content)

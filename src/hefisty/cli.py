@@ -436,6 +436,7 @@ def code_cmd(
         s,
         retriever=Retriever(s, ollama, KnowledgeStore(s.qdrant_url)),
         repo_collection=collection_name(s.workspace_dir),
+        max_rounds=s.coder_max_rounds,
     )
 
     def on_event(ev: str) -> None:

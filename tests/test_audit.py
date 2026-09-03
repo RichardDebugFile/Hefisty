@@ -47,7 +47,9 @@ class _ScriptedOllama:
         self._script = list(script)
         self.calls = 0
 
-    async def chat_tools(self, model, messages, tools, *, keep_alive="10m", options=None):
+    async def chat_tools(
+        self, model, messages, tools, *, keep_alive="10m", options=None, think=None
+    ):
         msg = (
             self._script[self.calls]
             if self.calls < len(self._script)
