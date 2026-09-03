@@ -1,6 +1,6 @@
 import pytest
 
-from hefisty.agents.tools import ToolError, edit, glob, grep, outline, read_range
+from hefisty.agents.tools import ToolError, edit, glob, grep, har, outline, read_range
 
 
 def test_glob_top_and_recursive(tmp_path):
@@ -78,12 +78,18 @@ def test_grep_explicit_file_respected_regardless_of_extension(tmp_path):
     assert res == ["notes.log:1: boom"]
 
 
-def test_grep_skips_huge_files(tmp_path):
-    big = "x" * (600 * 1024) + "\nNEEDLE\n"
-    (tmp_path / "huge.txt").write_text(big, encoding="utf-8")
+def test_grep_reads_big_logs(tmp_path):
+    # Los logs de evidencia (logcat .txt, bundles .js, .json de labels) pesan 1-3 MB y SON el
+    # objetivo del diagnóstico: antes se saltaban por el tope de 512 KB -> falso "sin resultados".
+    (tmp_path / "logcat.txt").write_text("x" * (1024 * 1024) + "\nNEEDLE\n", encoding="utf-8")
+    assert grep(tmp_path, "NEEDLE") == ["logcat.txt:2: NEEDLE"]
+
+
+def test_grep_skips_absurdly_huge_files(tmp_path):
+    # Sigue habiendo un tope, pero muy por encima de un log normal.
+    (tmp_path / "dump.txt").write_text("y" * (9 * 1024 * 1024), encoding="utf-8")
     (tmp_path / "small.txt").write_text("NEEDLE\n", encoding="utf-8")
-    res = grep(tmp_path, "NEEDLE")
-    assert res == ["small.txt:1: NEEDLE"]  # el enorme se salta en el recorrido
+    assert grep(tmp_path, "NEEDLE") == ["small.txt:1: NEEDLE"]
 
 
 def test_outline_lists_declarations(tmp_path):
@@ -151,3 +157,48 @@ def test_grep_nonexistent_path_raises(tmp_path):
     with pytest.raises(ToolError):
         grep(tmp_path, "hit", "no/existe/esta/ruta")
     assert grep(tmp_path, "hit") == ["a.kt:1: hit"]  # la ruta buena sigue funcionando
+
+
+def test_har_lists_and_details(tmp_path):
+    # Los .har que adjunta el usuario pesan >1 MB: hay que consultarlos sin volcarlos.
+    import json as _json
+
+    har_doc = {
+        "log": {
+            "entries": [
+                {
+                    "request": {
+                        "method": "GET",
+                        "url": "https://x/api/v1/otra",
+                        "headers": [],
+                    },
+                    "response": {"status": 200},
+                },
+                {
+                    "request": {
+                        "method": "POST",
+                        "url": "https://x/api/v1/accounts/corporate/aliases/create-own-bank",
+                        "headers": [{"name": "component", "value": "abc123"}],
+                        "postData": {"text": '{"transactionCode":"12"}'},
+                    },
+                    "response": {"status": 200, "content": {"text": '{"result":"KO"}'}},
+                },
+            ]
+        }
+    }
+    (tmp_path / "web.har").write_text(_json.dumps(har_doc), encoding="utf-8")
+
+    listado = har(tmp_path, "web.har", filtro="create-own-bank")
+    assert "#1  POST 200" in listado and "corporate/aliases" in listado
+    assert "otra" not in listado  # el filtro descarta las demás
+
+    detalle = har(tmp_path, "web.har", indice=1)
+    assert "component: abc123" in detalle  # header clave para comparar web vs mobile
+    assert '"transactionCode":"12"' in detalle  # body del request
+    assert '"result":"KO"' in detalle  # respuesta
+
+
+def test_har_rejects_non_har(tmp_path):
+    (tmp_path / "x.json").write_text('{"no": "es har"}', encoding="utf-8")
+    with pytest.raises(ToolError):
+        har(tmp_path, "x.json")

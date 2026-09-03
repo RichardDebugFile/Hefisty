@@ -7,9 +7,11 @@ queda para la Fase 3.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 
 class ToolError(Exception):
@@ -91,8 +93,11 @@ _TEXT_EXTS = frozenset(
         ".dart",
     }
 )
-# Aunque sea texto, un archivo enorme (bundle minificado, dump) infla grep y el contexto.
-_MAX_GREP_BYTES = 512 * 1024
+# Tope de tamaño en el RECORRIDO (un archivo pedido por su ruta se lee siempre). Generoso a
+# propósito: los logs de evidencia (logcat .txt), los bundles .js de web y los .json de labels
+# pesan 1-3 MB y son justo lo que hay que leer para diagnosticar un flujo. Con el pre-filtro de
+# una pasada, grepearlos es barato; saltárselos daba falsos "sin resultados".
+_MAX_GREP_BYTES = 8 * 1024 * 1024
 
 
 def _grep_candidate(rel: Path, abs_path: Path) -> bool:
@@ -326,6 +331,77 @@ def outline(workspace: Path, ruta: str, max_items: int = 200) -> list[str]:
             if len(out) >= max_items:
                 break
     return out
+
+
+def _har_entries(p: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(p.read_text(encoding="utf-8", errors="replace"))  # NOSONAR: _resolve()
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ToolError(f"No se pudo leer el HAR {p.name}: {exc}") from exc
+    entries = data.get("log", {}).get("entries")
+    if not isinstance(entries, list):
+        raise ToolError(f"{p.name} no parece un HAR (falta log.entries)")
+    return entries
+
+
+def har(workspace: Path, ruta: str, filtro: str = "", indice: int | None = None) -> str:
+    """Consulta un `.har` sin volcarlo (suelen pesar >1 MB: no caben en el contexto).
+
+    - Sin `indice`: lista las peticiones `#i  METHOD status  url` (filtradas por `filtro`,
+      subcadena sobre la URL).
+    - Con `indice`: muestra esa petición en detalle — headers relevantes, query, body del
+      request y principio de la respuesta. Es lo que hace falta para comparar web vs mobile.
+    """
+    p = _resolve(workspace, ruta)
+    if not p.is_file():
+        raise ToolError(f"No existe el archivo: {ruta}")
+    entries = _har_entries(p)
+
+    if indice is None:
+        out: list[str] = []
+        for i, e in enumerate(entries):
+            req, res = e.get("request", {}), e.get("response", {})
+            url = req.get("url", "")
+            if filtro and filtro.lower() not in url.lower():
+                continue
+            out.append(f"#{i}  {req.get('method', '?')} {res.get('status', '?')}  {url[:180]}")
+            if len(out) >= 200:
+                out.append("… (más entradas; acota con `filtro`)")
+                break
+        total = len(entries)
+        cab = f"{p.name}: {total} peticiones" + (f" · filtro={filtro!r}" if filtro else "")
+        return cab + "\n" + ("\n".join(out) or "(ninguna casa el filtro)")
+
+    if not 0 <= indice < len(entries):
+        raise ToolError(f"indice fuera de rango (0..{len(entries) - 1})")
+    e = entries[indice]
+    req, res = e.get("request", {}), e.get("response", {})
+    interesantes = {"component", "authorization", "content-type", "accept", "x-", "cookie"}
+
+    def _heads(hs: list[dict[str, Any]]) -> list[str]:
+        out = []
+        for h in hs or []:
+            n = str(h.get("name", "")).lower()
+            if any(n.startswith(k) or n == k for k in interesantes):
+                v = str(h.get("value", ""))
+                out.append(f"    {h.get('name')}: {v[:120]}")
+        return out
+
+    partes = [
+        f"#{indice}  {req.get('method', '?')} {res.get('status', '?')}  {req.get('url', '')}",
+        "  request headers:",
+        *_heads(req.get("headers", [])),
+    ]
+    qs = req.get("queryString") or []
+    if qs:
+        partes.append("  query: " + ", ".join(f"{q.get('name')}={q.get('value')}" for q in qs))
+    body = (req.get("postData") or {}).get("text")
+    if body:
+        partes += ["  request body:", "    " + body[:1500]]
+    rtext = (res.get("content") or {}).get("text")
+    if rtext:
+        partes += ["  response body (inicio):", "    " + rtext[:800]]
+    return "\n".join(partes)
 
 
 def read_range(workspace: Path, ruta: str, inicio: int, fin: int) -> str:

@@ -63,6 +63,15 @@ TOOLS_SPEC = [
         ["ruta", "inicio", "fin"],
     ),
     _fn(
+        "har",
+        "Consulta un archivo .har (captura de red) sin volcarlo: sin 'indice' lista las "
+        "peticiones (METHOD status url), con 'filtro' acota por subcadena de la URL; con "
+        "'indice' muestra esa petición en detalle (headers, query, body del request y "
+        "respuesta). Úsalo para comparar lo que hace web contra lo que manda mobile.",
+        {"ruta": _STR, "filtro": _STR, "indice": _INT},
+        ["ruta"],
+    ),
+    _fn(
         "outline",
         "Esqueleto de un archivo: sus declaraciones (fun/class/object/interface/enum/def) con "
         "su número de línea, sin leerlo entero. Úsalo para saltar a la función correcta.",
@@ -210,6 +219,14 @@ class AgenticCoder:
             if name == "read_range":
                 return tools.read_range(
                     self._ws, args["ruta"], int(args["inicio"]), int(args["fin"])
+                )
+            if name == "har":
+                idx = args.get("indice")
+                return tools.har(
+                    self._ws,
+                    args["ruta"],
+                    str(args.get("filtro") or ""),
+                    int(idx) if idx is not None and str(idx) != "" else None,
                 )
             if name == "outline":
                 return "\n".join(tools.outline(self._ws, args["ruta"])) or "(sin declaraciones)"
