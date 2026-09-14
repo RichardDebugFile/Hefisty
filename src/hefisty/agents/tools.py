@@ -168,21 +168,25 @@ def _resolve_tolerant(workspace: Path, ruta: str) -> tuple[Path, str]:
     if not suffix or any(ch in suffix for ch in "*?"):
         return p, ""
     parts = suffix.split("/")
-    matches: list[Path] = []
+    entries: list[list[str]] = []
     for root, dirs, filenames in os.walk(ws):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
         rel_root = Path(root).relative_to(ws).as_posix()
         for name in dirs + filenames:
             full = f"{rel_root}/{name}" if rel_root != "." else name
-            if full.split("/")[-len(parts) :] == parts:
-                matches.append(ws / full)
-    matches.sort()  # os.walk no ordena (Linux ≠ Windows): salida determinista
-    if len(matches) == 1:
-        real = matches[0].relative_to(ws).as_posix()
-        return matches[0], f"(ruta corregida: '{ruta}' → '{real}')"
-    if len(matches) > 1:
-        opts = ", ".join(m.relative_to(ws).as_posix() for m in matches[:6])
-        raise ToolError(f"No existe la ruta: {ruta}. ¿Quisiste decir una de estas? {opts}")
+            entries.append(full.split("/"))
+    # Sufijo completo primero; si no casa, se acorta por la izquierda (el modelo mezcla
+    # segmentos reales con inventados: `<modulo>/app/pedidos` cuando lo real acaba en
+    # `.../x/app/pedidos`). Se para en el primer largo que casa: único → se usa; varios → se
+    # listan para que elija.
+    for k in range(len(parts), 0, -1):
+        tail = parts[-k:]
+        matches = sorted("/".join(e) for e in entries if e[-k:] == tail)
+        if len(matches) == 1:
+            return ws / matches[0], f"(ruta corregida: '{ruta}' → '{matches[0]}')"
+        if len(matches) > 1:
+            opts = ", ".join(matches[:6])
+            raise ToolError(f"No existe la ruta: {ruta}. ¿Quisiste decir una de estas? {opts}")
     return p, ""
 
 

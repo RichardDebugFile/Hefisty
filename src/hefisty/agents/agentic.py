@@ -186,6 +186,15 @@ _TOOL_ALIASES = {
 # Líneas de cabecera que se muestran de un archivo grande antes de su esqueleto.
 _BIG_FILE_HEAD = 60
 
+# Foco de módulo fijado en la ronda de orientación (ver `_orient`). Va como mensaje de
+# sistema: sobrevive a los recortes de contexto y a los nudges.
+_FOCUS_TEMPLATE = (
+    "FOCO DE LA TAREA (tú mismo lo determinaste al orientarte con el mapa):\n{foco}\n"
+    "Trabaja DENTRO de estas carpetas: acota grep con `ruta=<una de ellas>`, lista y lee ahí. "
+    "Otros módulos con nombres parecidos NO son el sitio, aunque un grep amplio los muestre. "
+    "Solo sal del foco si demuestras (con grep acotado sin resultados) que el código no está."
+)
+
 _EMPTY_NUDGE = (
     "Tu última respuesta llegó VACÍA (sin texto ni herramienta). Continúa la tarea: llama a "
     "la siguiente herramienta (read_range/outline/grep/edit) o, si ya terminaste, escribe el "
@@ -508,20 +517,21 @@ class AgenticCoder:
             }
         ]
 
-    def _workspace_tree(self) -> str:
+    def _workspace_tree(self) -> tuple[str, bool]:
         """Contexto inicial para orientar al Coder y que no navegue carpeta por carpeta.
         Repo chico → lista de archivos. Repo grande → MAPA de paquetes (carpeta + nº de
         archivos): da el panorama del dominio sin volcar miles de rutas (que además, con VRAM
-        justa, inflarían el KV-cache y provocarían 500/OOM en gpt-oss)."""
+        justa, inflarían el KV-cache y provocarían 500/OOM en gpt-oss).
+        Devuelve (texto, es_mapa)."""
         try:
             files = tools.glob(self._ws, "**/*")
         except tools.ToolError:
-            return ""
+            return "", False
         files = [f for f in files if not (set(f.split("/")) & _TREE_SKIP)]
         if not files:
-            return ""
+            return "", False
         if len(files) > _MAX_TREE:
-            return self._dir_map(files)
+            return self._dir_map(files), True
         lines: list[str] = []
         used = 0
         for f in files:
@@ -533,7 +543,57 @@ class AgenticCoder:
         extra = len(files) - len(lines)
         if extra > 0:
             listing += f"\n… (+{extra} archivos; usa glob/grep/outline para el resto)"
-        return listing
+        return listing, False
+
+    async def _orient(self, task: str, mapa: str, rec: RunRecorder) -> list[str]:
+        """Ronda de ORIENTACIÓN previa (sin tools): con el enunciado y el mapa, el modelo dice
+        en qué carpeta(s) vive el módulo del que habla la tarea. Se valida que existan y se
+        fijan como FOCO en un mensaje de sistema (sobrevive a los recortes de contexto).
+
+        Motivo: en 5 de 6 corridas de la eval §6 (13/09/2026) el modelo leyó "pestaña
+        Favoritos" y se fue al módulo genérico de favoritos, ignorando "Aprobaciones" y el
+        mapa; la única vez que miró el mapa antes de buscar acertó el módulo y el archivo.
+        Nunca rompe la corrida: cualquier fallo devuelve [] y se sigue sin foco."""
+        prompt = (
+            "ANTES de tocar nada, orientación. Este es el mapa de carpetas del workspace "
+            "(carpeta/ (nº de archivos); › = tiene subcarpetas):\n"
+            f"{mapa}\n\n"
+            f"TAREA:\n{task}\n\n"
+            "¿En qué carpeta(s) del mapa vive el código de la PANTALLA/MÓDULO del que habla la "
+            "tarea? Fíjate en el módulo o pantalla que nombra el enunciado (p. ej. una sección "
+            "de la app), no en palabras sueltas que también aparecen en otros módulos. Si el "
+            "enunciado menciona un caso hermano que funciona, incluye también su carpeta. "
+            "Responde SOLO con 1-3 rutas de carpeta copiadas del mapa (ruta completa desde la "
+            "raíz, una por línea, la más probable primero), sin explicaciones."
+        )
+        try:
+            raw = await self._ollama.chat(
+                self._role.model,
+                [{"role": "user", "content": prompt}],
+                keep_alive=self._s.keep_alive,
+                options={"num_ctx": self._s.coder_num_ctx} if self._s.coder_num_ctx else None,
+            )
+        except Exception as exc:  # orientación es opcional: nunca tumba la tarea
+            logger.warning("orientación falló: %s", exc)
+            rec.note("foco_error", error=str(exc)[:200])
+            return []
+        foco: list[str] = []
+        for line in str(raw).splitlines():
+            cand = line.strip().strip("`-*• ").split(" (")[0].strip().rstrip("/")
+            if not cand or " " in cand:
+                continue
+            try:
+                p, _nota = tools._resolve_tolerant(self._ws, cand)
+            except tools.ToolError:
+                continue
+            if p.is_dir():
+                rel = p.relative_to(Path(self._ws).resolve()).as_posix()
+                if rel not in foco:
+                    foco.append(rel)
+            if len(foco) == 3:
+                break
+        rec.note("foco", carpetas=foco, respuesta=str(raw)[:300])
+        return foco
 
     def _dir_map(self, files: list[str]) -> str:
         """Mapa de carpetas como ÁRBOL compactado y equilibrado en profundidad.
@@ -582,7 +642,7 @@ class AgenticCoder:
             {"role": "system", "content": self._role.system_prompt + _TOOL_GUIDANCE},
             *await self._dict_context(task, rec),
         ]
-        tree = self._workspace_tree()
+        tree, is_map = self._workspace_tree()
         if tree:
             convo.append(
                 {
@@ -593,6 +653,11 @@ class AgenticCoder:
                         "carpeta por carpeta:\n" + tree
                     ),
                 }
+            )
+        foco = await self._orient(task, tree, rec) if is_map else []
+        if foco:
+            convo.append(
+                {"role": "system", "content": _FOCUS_TEMPLATE.format(foco="\n".join(foco))}
             )
         convo.append({"role": "user", "content": task})
         steps = 0

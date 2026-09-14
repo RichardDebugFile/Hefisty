@@ -427,6 +427,52 @@ async def test_agentic_injects_dir_map_for_large_repo(tmp_path):
     assert "F0.kt" not in joined  # no vuelca los 220 archivos uno por uno
 
 
+class OrientingOllama(CapturingOllama):
+    """Además de chat_tools, responde a la ronda de orientación (chat sin tools)."""
+
+    def __init__(self, script, orientation):
+        super().__init__(script)
+        self.orientation = orientation
+        self.orientation_prompt = None
+
+    async def chat(self, model, messages, *, keep_alive="10m", fmt=None, options=None):
+        self.orientation_prompt = messages[-1]["content"]
+        return self.orientation
+
+
+async def test_orientation_fixes_module_focus_for_large_repo(tmp_path):
+    # Repo grande (mapa): antes del bucle, el modelo dice en qué carpeta vive el módulo de la
+    # tarea; se validan las rutas y se fijan como FOCO en un mensaje de sistema.
+    pkg = tmp_path / "app" / "pedidos" / "detalle"
+    pkg.mkdir(parents=True)
+    for i in range(220):
+        (pkg / f"F{i}.kt").write_text("class F {}", encoding="utf-8")
+    (tmp_path / "app" / "pagos").mkdir()
+    ollama = OrientingOllama(
+        [{"content": "listo", "tool_calls": []}],
+        orientation="- app/pedidos/detalle/ (220)\napp/no/existe\n`app/pagos`\n",
+    )
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    res = await agent.run("en Pedidos, pestaña Detalle, el filtro no funciona")
+    assert "pestaña Detalle" in ollama.orientation_prompt  # la tarea va en la orientación
+    assert "app/pedidos/detalle/ (220)" in ollama.orientation_prompt  # y el mapa
+    focus = [m for m in ollama.first_messages if m["role"] == "system" and "FOCO" in m["content"]]
+    assert len(focus) == 1
+    assert "app/pedidos/detalle\napp/pagos\n" in focus[0]["content"]  # validadas y limpias
+    assert "no/existe" not in focus[0]["content"]
+    notes = [json.loads(ln) for ln in open(res["audit"], encoding="utf-8")]
+    foco_note = next(n for n in notes if n["event"] == "note" and n["text"] == "foco")
+    assert foco_note["carpetas"] == ["app/pedidos/detalle", "app/pagos"]
+
+
+async def test_orientation_skipped_for_small_repo_and_never_breaks(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    ollama = CapturingOllama([{"content": "listo", "tool_calls": []}])  # sin método `chat`
+    agent = AgenticCoder(ollama, load_role("coder"), tmp_path, Settings())
+    await agent.run("arregla a.py")  # repo chico: no hay orientación, no llama a chat
+    assert not any("FOCO" in m["content"] for m in ollama.first_messages)
+
+
 def test_dir_map_expands_biggest_subtrees_first(tmp_path):
     # Eval §6 (13/09/2026): el mapa alfabético con tope de chars mostraba 75 carpetas, TODAS de
     # `cuentas/`; `pedidos/` y 500 más no existían para el modelo. Ahora se despliegan

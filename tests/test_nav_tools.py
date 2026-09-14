@@ -65,6 +65,11 @@ def test_tolerant_path_suffix_and_wildcards(tmp_path):
         "(sin resultados)",
     ]
     assert listar_directorio(tmp_path, "pedidos")[-1] == "V.kt"
+    # Segmentos inventados a la izquierda de un sufijo real (lo que respondió la ronda de
+    # orientación en §6 v7): se acorta el sufijo hasta que casa de forma única.
+    assert listar_directorio(tmp_path, "modulo-x/mobile/main/pedidos")[0] == (
+        "(ruta corregida: 'modulo-x/mobile/main/pedidos' → 'app/src/main/pedidos')"
+    )
     assert read_range(tmp_path, "pedidos/V.kt", 1, 1).startswith("(ruta corregida")
     assert outline(tmp_path, "V.kt")[-1] == "1: fun buscar() {}"
 
