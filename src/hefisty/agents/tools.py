@@ -176,6 +176,7 @@ def _resolve_tolerant(workspace: Path, ruta: str) -> tuple[Path, str]:
             full = f"{rel_root}/{name}" if rel_root != "." else name
             if full.split("/")[-len(parts) :] == parts:
                 matches.append(ws / full)
+    matches.sort()  # os.walk no ordena (Linux ≠ Windows): salida determinista
     if len(matches) == 1:
         real = matches[0].relative_to(ws).as_posix()
         return matches[0], f"(ruta corregida: '{ruta}' → '{real}')"
