@@ -65,6 +65,11 @@ class Settings(BaseModel):
     # Tope de rondas del bucle agéntico. Las tareas multi-paso (leer evidencia + localizar +
     # editar) necesitan más presupuesto que un fix puntual. HEFISTY_CODER_MAX_ROUNDS.
     coder_max_rounds: int = 20
+    # Tope de usos de `search_code` (búsqueda semántica) por tarea. Es APROXIMADA y el modelo
+    # tiende a encadenarla (44 % de sus llamadas en la eval del 03/09/2026, casi nunca resolvía)
+    # en vez de grep exacto. Al agotar el tope la tool DESAPARECE del set de esa corrida.
+    # 0 = no ofrecerla nunca. HEFISTY_CODER_SEARCH_CODE_MAX.
+    coder_search_code_max: int = 2
     # Descargar el modelo grande (Coder) de VRAM al terminar el turno/cadena, en vez de
     # dejarlo residente `keep_alive` minutos ocupando ~13 GB sin trabajar. Con presupuesto
     # de VRAM ajustado (15.46/16) conviene True; recarga en 1-3 s desde el page cache de RAM
@@ -88,6 +93,12 @@ class Settings(BaseModel):
     chunk_overlap: int = 64
     retrieval_k: int = 6
     retrieval_score_min: float = 0.4
+    # Tope de chunks por colección dentro del top-k. Sin él, la colección de método (`skills`,
+    # redactada en genérico sobre "localizar/corregir bugs") puntúa alto para CUALQUIER tarea y
+    # desplaza al conocimiento de dominio: en la eval §2 (13/09/2026) 4 de 6 chunks eran skills
+    # y la silueta de bug exacta (`patrones/10-formas-de-bug`) se quedó fuera. Si tras el tope
+    # sobran huecos se rellenan con los mejores restantes. 0 = sin tope. HEFISTY_RETRIEVAL_PER_COL.
+    retrieval_per_collection: int = 2
     # Colecciones extra que el Coder consulta SIEMPRE, además de [lenguaje, patrones].
     # Para diccionarios por proyecto (p. ej. el repo objetivo). Coma-separado en el entorno.
     extra_collections: list[str] = []
@@ -133,6 +144,7 @@ class Settings(BaseModel):
             coder_num_ctx=int(e("HEFISTY_CODER_NUM_CTX", "8192")),
             coder_reasoning=e("HEFISTY_CODER_REASONING", "medium").strip(),
             coder_max_rounds=int(e("HEFISTY_CODER_MAX_ROUNDS", "20")),
+            coder_search_code_max=int(e("HEFISTY_CODER_SEARCH_CODE_MAX", "2")),
             unload_coder_after_turn=e("HEFISTY_UNLOAD_CODER", "1").lower()
             not in ("0", "false", "no", "off"),
             workspace_dir=Path(e("HEFISTY_WORKSPACE_DIR", str(REPO_ROOT / "workspace"))),
@@ -145,6 +157,7 @@ class Settings(BaseModel):
             chunk_overlap=int(e("HEFISTY_CHUNK_OVERLAP", "64")),
             retrieval_k=int(e("HEFISTY_RETRIEVAL_K", "6")),
             retrieval_score_min=float(e("HEFISTY_RETRIEVAL_SCORE_MIN", "0.4")),
+            retrieval_per_collection=int(e("HEFISTY_RETRIEVAL_PER_COL", "2")),
             extra_collections=[
                 c.strip() for c in e("HEFISTY_EXTRA_COLLECTIONS", "").split(",") if c.strip()
             ],

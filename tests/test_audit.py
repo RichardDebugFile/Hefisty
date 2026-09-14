@@ -76,6 +76,7 @@ async def test_run_produces_trace_with_edit_and_stop_reason(tmp_path):
             ],
         },
         {"content": "cambié x a 2", "tool_calls": []},
+        {"content": "revisado: todo aplicado", "tool_calls": []},  # respuesta al pase de revisión
     ]
     settings = Settings(data_dir=tmp_path, audit_enabled=True)
     agent = AgenticCoder(_ScriptedOllama(script), load_role("coder"), tmp_path, settings)
@@ -90,6 +91,25 @@ async def test_run_produces_trace_with_edit_and_stop_reason(tmp_path):
     assert end["stop_reason"] == "completed" and end["touched"] == ["app.py"]
     edit_ev = next(e for e in events if e["event"] == "edit")
     assert edit_ev["old"] == "x = 1" and edit_ev["new"] == "x = 2"
+
+
+async def test_run_retries_empty_responses_then_stops(tmp_path):
+    # Eval §6 v4 (13/09/2026): gpt-oss devolvió una respuesta vacía a mitad de tarea y el bucle
+    # la tomó por "terminado" (answer ""). Ahora se reintenta 2 veces re-anclando la tarea y,
+    # si sigue vacío, cierra con stop_reason propio y la última respuesta con texto.
+    script = [
+        {"content": "voy a mirar el archivo", "tool_calls": []},
+        {"content": "", "tool_calls": []},  # vacía → reintento 1
+        {"content": "", "tool_calls": []},  # vacía → reintento 2
+        {"content": "", "tool_calls": []},  # vacía → se rinde
+    ]
+    settings = Settings(data_dir=tmp_path, audit_enabled=True)
+    agent = AgenticCoder(_ScriptedOllama(script), load_role("coder"), tmp_path, settings)
+    res = await agent.run("arregla algo", None)
+    events = _read_events(Path(res["audit"]))
+    assert events[-1]["stop_reason"] == "empty_response"
+    assert res["answer"] == "voy a mirar el archivo"
+    assert sum(1 for e in events if e["event"] == "note" and e["text"] == "respuesta_vacia") == 3
 
 
 async def test_run_trace_records_max_rounds(tmp_path):
