@@ -141,13 +141,48 @@ def escribir_archivo(workspace: Path, ruta: str, contenido: str) -> str:
 
 
 def listar_directorio(workspace: Path, ruta: str = ".") -> list[str]:
-    p = _resolve(workspace, ruta)
+    p, nota = _resolve_tolerant(workspace, ruta)
     if not p.is_dir():
         raise ToolError(f"No es un directorio: {ruta}")
-    return sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())  # NOSONAR: _resolve()
+    out = [nota] if nota else []
+    return out + sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())  # NOSONAR
 
 
 # --- Navegación de código (todas confinadas al workspace) ---
+
+
+def _resolve_tolerant(workspace: Path, ruta: str) -> tuple[Path, str]:
+    """`_resolve` + corrección de rutas a medias. El modelo escribe rutas PARCIALES que son un
+    sufijo de la real (`app-mobile/src/main/java/.../pedidos` sin el módulo raíz), con
+    comodines (`**/pedidos`) o solo el nombre de la carpeta/archivo. Si la ruta no existe
+    y hay UNA sola carpeta/archivo del workspace cuya ruta relativa termina así, se usa esa y se
+    avisa; si hay varias, se listan para que elija. Cada ronda perdida en "No existe la ruta"
+    era una ronda menos para arreglar (eval §6 v3, 13/09/2026: 3 de 26)."""
+    p = _resolve(workspace, ruta)
+    if p.exists():
+        return p, ""
+    ws = Path(workspace).resolve()
+    suffix = ruta.replace("\\", "/").strip("/")
+    # Quitar comodines de cabecera (`**/`, `*/`) — la intención es "en algún sitio".
+    suffix = re.sub(r"^(\*\*?/)+", "", suffix)
+    if not suffix or any(ch in suffix for ch in "*?"):
+        return p, ""
+    parts = suffix.split("/")
+    matches: list[Path] = []
+    for root, dirs, filenames in os.walk(ws):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        rel_root = Path(root).relative_to(ws).as_posix()
+        for name in dirs + filenames:
+            full = f"{rel_root}/{name}" if rel_root != "." else name
+            if full.split("/")[-len(parts) :] == parts:
+                matches.append(ws / full)
+    if len(matches) == 1:
+        real = matches[0].relative_to(ws).as_posix()
+        return matches[0], f"(ruta corregida: '{ruta}' → '{real}')"
+    if len(matches) > 1:
+        opts = ", ".join(m.relative_to(ws).as_posix() for m in matches[:6])
+        raise ToolError(f"No existe la ruta: {ruta}. ¿Quisiste decir una de estas? {opts}")
+    return p, ""
 
 
 def _inside(ws: Path, p: Path) -> bool:
@@ -244,19 +279,61 @@ def glob(workspace: Path, patron: str) -> list[str]:
     return []
 
 
+# Tope de hits que se listan en detalle; por encima, grep devuelve un RESUMEN por archivo.
+# Antes cortaba por líneas de salida (200) en orden de recorrido: con contexto=5 el modelo veía
+# ~15 hits, todos de la primera carpeta alfabética (`cuentas/`), y los del módulo que buscaba
+# (`pedidos/`) quedaban fuera del corte sin aviso (eval §6, 13/09/2026: `queryText`
+# tenía 38 hits en 18 archivos, 13 en pedidos/, y el modelo nunca los vio).
+_GREP_MAX_DETALLE = 30
+_GREP_MAX_DETALLE_SIN_CONTEXTO = 80
+_GREP_MAX_HITS = 3000
+_GREP_MAX_ARCHIVOS_RESUMEN = 40
+
+
+def _grep_resumen(hits: list[tuple[str, int, str]], truncado: bool) -> list[str]:
+    """Vista `grep -c` enriquecida: archivos ordenados por nº de hits con sus líneas."""
+    por_archivo: dict[str, list[int]] = {}
+    for rel, i, _ in hits:
+        por_archivo.setdefault(rel, []).append(i)
+    n_files = len(por_archivo)
+    out = [
+        f"{len(hits)}{'+' if truncado else ''} coincidencias en {n_files} archivos: demasiadas "
+        "para listarlas. Por archivo (líneas), de más a menos hits:"
+    ]
+    ordenados = sorted(por_archivo.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    for rel, lineas in ordenados[:_GREP_MAX_ARCHIVOS_RESUMEN]:
+        shown = ", ".join(str(x) for x in lineas[:8])
+        extra = f", … (+{len(lineas) - 8})" if len(lineas) > 8 else ""
+        out.append(f"  {rel}: {shown}{extra} [{len(lineas)}]")
+    if n_files > _GREP_MAX_ARCHIVOS_RESUMEN:
+        out.append(f"  … (+{n_files - _GREP_MAX_ARCHIVOS_RESUMEN} archivos más)")
+    out.append(
+        "Acota: `ruta=<carpeta del módulo>` (p. ej. la del enunciado), un identificador más "
+        "específico, o `read_range`/`outline` directo en el archivo que te interese."
+    )
+    return out
+
+
 def grep(
     workspace: Path,
     regex: str,
     ruta: str = ".",
-    max_resultados: int = 200,
+    max_resultados: int = 0,
     contexto: int = 0,
 ) -> list[str]:
     """Líneas que casan `regex` bajo `ruta`. Formato: `archivo:linea: contenido`.
 
     Con `contexto=N` devuelve además las N líneas de alrededor de cada hit (como `grep -C`),
     para ver el código que rodea al match sin una segunda llamada a read_range: el modelo
-    acertaba el archivo pero fallaba la ventana al leer."""
-    base = _resolve(workspace, ruta)
+    acertaba el archivo pero fallaba la ventana al leer.
+
+    Si hay más hits que `max_resultados` (por defecto `_GREP_MAX_DETALLE*`), devuelve un
+    RESUMEN por archivo (todos los archivos, ordenados por nº de hits) en vez de los primeros
+    N en orden de recorrido: así el modelo ve en qué archivos/carpetas se concentra el término
+    y acota, en lugar de quedarse con los de la primera carpeta alfabética."""
+    if max_resultados <= 0:
+        max_resultados = _GREP_MAX_DETALLE if contexto > 0 else _GREP_MAX_DETALLE_SIN_CONTEXTO
+    base, nota = _resolve_tolerant(workspace, ruta)
     ws = Path(workspace).resolve()
     # Una ruta inexistente (typo del modelo) devolvía "(sin resultados)": una señal FALSA que le
     # hace concluir "aquí no hay nada" y seguir por mal camino. Debe fallar ruidosamente.
@@ -279,7 +356,11 @@ def grep(
         prefilter = re.compile(regex, re.MULTILINE)
     except re.error:  # ya validada arriba; por si el flag cambia la compilación
         prefilter = pat
-    out: list[str] = []
+    # 1) Recoger TODOS los hits (rel, línea, texto) — barato gracias al pre-filtro — y las
+    #    líneas de cada archivo con hits (para el contexto). Tope de seguridad en _GREP_MAX_HITS.
+    hits: list[tuple[str, int, str]] = []
+    lineas_por_archivo: dict[str, list[str]] = {}
+    truncado = False
     for f in files:
         if not _inside(ws, f):  # symlink que escapa del workspace
             continue
@@ -291,19 +372,31 @@ def grep(
             continue
         rel = f.relative_to(ws).as_posix()
         lines = content.splitlines()
+        lineas_por_archivo[rel] = lines
         for i, line in enumerate(lines, 1):
-            if not pat.search(line):
-                continue
-            if contexto > 0:
-                lo, hi = max(1, i - contexto), min(len(lines), i + contexto)
-                out.append(f"{rel}:{i}:")
-                for j in range(lo, hi + 1):
-                    marca = ">" if j == i else " "
-                    out.append(f"  {marca}{j}: {lines[j - 1][:200]}")
-            else:
-                out.append(f"{rel}:{i}: {line.strip()[:200]}")
-            if len(out) >= max_resultados:
-                return out
+            if pat.search(line):
+                hits.append((rel, i, line))
+                if len(hits) >= _GREP_MAX_HITS:
+                    truncado = True
+                    break
+        if truncado:
+            break
+    # 2) Muchos hits → resumen por archivo; pocos → detalle (con contexto si se pidió).
+    if len(hits) > max_resultados:
+        return ([nota] if nota else []) + _grep_resumen(hits, truncado)
+    out: list[str] = [nota] if nota else []
+    if nota and not hits:
+        out.append("(sin resultados)")
+    for rel, i, line in hits:
+        if contexto > 0:
+            lines = lineas_por_archivo[rel]
+            lo, hi = max(1, i - contexto), min(len(lines), i + contexto)
+            out.append(f"{rel}:{i}:")
+            for j in range(lo, hi + 1):
+                marca = ">" if j == i else " "
+                out.append(f"  {marca}{j}: {lines[j - 1][:200]}")
+        else:
+            out.append(f"{rel}:{i}: {line.strip()[:200]}")
     return out
 
 
@@ -320,11 +413,11 @@ _DECL_RE = re.compile(
 
 def outline(workspace: Path, ruta: str, max_items: int = 200) -> list[str]:
     """Esqueleto de un archivo: sus declaraciones (`linea: declaración`), sin leerlo completo."""
-    p = _resolve(workspace, ruta)
+    p, nota = _resolve_tolerant(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
     lines = p.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR: _resolve()
-    out: list[str] = []
+    out: list[str] = [nota] if nota else []
     for i, line in enumerate(lines, 1):
         if _DECL_RE.match(line):
             out.append(f"{i}: {line.strip()[:160]}")
@@ -405,26 +498,124 @@ def har(workspace: Path, ruta: str, filtro: str = "", indice: int | None = None)
 
 
 def read_range(workspace: Path, ruta: str, inicio: int, fin: int) -> str:
-    """Lee las líneas [inicio, fin] (1-indexadas) con número de línea."""
-    p = _resolve(workspace, ruta)
+    """Lee las líneas [inicio, fin] (1-indexadas) con número de línea.
+
+    Cierra con un pie: total de líneas del archivo y las 3 declaraciones que vienen DESPUÉS
+    de la ventana. En la eval §6 v3 (13/09/2026) el modelo leyó 1-160 del archivo correcto y
+    paró; la función causante empezaba en la 184. Con el pie la ve sin otra ronda."""
+    p, nota = _resolve_tolerant(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
     lines = p.read_text(encoding="utf-8", errors="replace").splitlines()  # NOSONAR: _resolve()
     inicio = max(1, inicio)
     fin = min(len(lines), fin)
-    return "\n".join(f"{i}: {lines[i - 1]}" for i in range(inicio, fin + 1))
+    out = [nota] if nota else []
+    out += [f"{i}: {lines[i - 1]}" for i in range(inicio, fin + 1)]
+    siguientes = []
+    for j in range(fin + 1, len(lines) + 1):
+        if _DECL_RE.match(lines[j - 1]):
+            siguientes.append(f"{j}: {lines[j - 1].strip()[:100]}")
+            if len(siguientes) == 3:
+                break
+    pie = f"(archivo de {len(lines)} líneas"
+    if siguientes:
+        pie += "; declaraciones siguientes → " + " | ".join(siguientes)
+    out.append(pie + ")")
+    return "\n".join(out)
+
+
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _match_ignoring_indent(lines: list[str], old: str) -> list[int]:
+    """Índices de línea donde `old` casa con el archivo comparando cada línea SIN su
+    indentación ni espacios finales. Devuelve todos los inicios posibles."""
+    old_lines = [ln.strip() for ln in old.strip("\r\n").splitlines()]
+    if not old_lines or not any(old_lines):
+        return []
+    stripped = [ln.strip() for ln in lines]
+    n = len(old_lines)
+    return [i for i in range(len(lines) - n + 1) if stripped[i : i + n] == old_lines]
+
+
+def _reindent(new: str, model_first_indent: str, file_first_indent: str) -> list[str]:
+    """Reubica `new` a la indentación real del archivo conservando la indentación RELATIVA
+    que el modelo dio a cada línea respecto a su primera línea del texto viejo."""
+    out = []
+    for ln in new.strip("\r\n").splitlines():
+        ind = _indent_of(ln)
+        if ind.startswith(model_first_indent):
+            ind = file_first_indent + ind[len(model_first_indent) :]
+        else:  # menos indentado que la 1ª línea (raro): mantener su indentación relativa
+            dedent = len(model_first_indent) - len(ind)
+            ind = file_first_indent[: max(0, len(file_first_indent) - dedent)]
+        out.append(ind + ln.lstrip(" \t"))
+    return out
+
+
+def _echo_region(content: str, first_line: int, last_line: int, margin: int = 2) -> str:
+    """Devuelve las líneas editadas (con `margin` de contexto) numeradas: el modelo VE lo que
+    produjo. Un reemplazo de sub-línea puede dejar restos (`val ` huérfano al sustituir
+    `firstEntry = …` por otra expresión, visto en la eval §2 v4) y sin eco no se entera."""
+    lines = content.splitlines()
+    a = max(1, first_line - margin)
+    b = min(len(lines), last_line + margin)
+    return "\n".join(f"{k}: {lines[k - 1]}" for k in range(a, b + 1))
 
 
 def edit(workspace: Path, ruta: str, texto_viejo: str, texto_nuevo: str) -> str:
-    """Reemplazo exacto único verificable. Falla si `texto_viejo` no es único."""
+    """Reemplazo único verificable. Primero exacto; si no casa, tolera diferencias de
+    INDENTACIÓN (el modelo reconstruye el sangrado a ojo desde `read_range`, que lleva el
+    prefijo `NNNN: `, y falla 7 veces seguidas en el mismo bloque) reubicando el texto nuevo
+    a la indentación real del archivo. Falla si el bloque no es único o no aparece, y en ese
+    caso señala las líneas parecidas para que el modelo copie el texto exacto."""
     p = _resolve(workspace, ruta)
     if not p.is_file():
         raise ToolError(f"No existe el archivo: {ruta}")
     content = p.read_text(encoding="utf-8")  # NOSONAR: path validado por _resolve()
     n = content.count(texto_viejo)
-    if n == 0:
-        raise ToolError(f"Texto a reemplazar no encontrado en {ruta}")
     if n > 1:
         raise ToolError(f"Texto no único en {ruta} ({n} ocurrencias); añade contexto")
-    p.write_text(content.replace(texto_viejo, texto_nuevo, 1), encoding="utf-8")  # NOSONAR
-    return f"editado: {ruta}"
+    if n == 1:
+        pos = content.index(texto_viejo)
+        new_content = content.replace(texto_viejo, texto_nuevo, 1)
+        p.write_text(new_content, encoding="utf-8")  # NOSONAR: path validado por _resolve()
+        first_line = content.count("\n", 0, pos) + 1
+        last_line = first_line + texto_nuevo.count("\n")
+        return f"editado: {ruta}\n" + _echo_region(new_content, first_line, last_line)
+
+    lines = content.splitlines(keepends=True)
+    starts = _match_ignoring_indent(lines, texto_viejo)
+    if len(starts) > 1:
+        raise ToolError(
+            f"Texto no único en {ruta} (casa en las líneas {', '.join(str(s + 1) for s in starts)} "
+            "ignorando indentación); añade contexto"
+        )
+    if len(starts) == 1:
+        i = starts[0]
+        count = len(texto_viejo.strip("\r\n").splitlines())
+        block = lines[i : i + count]
+        model_indent = _indent_of(texto_viejo.strip("\r\n").splitlines()[0])
+        new_lines = _reindent(texto_nuevo, model_indent, _indent_of(block[0]))
+        nl = "\r\n" if block[-1].endswith("\r\n") else "\n"
+        replacement = nl.join(new_lines) + (nl if block[-1].endswith(("\n", "\r")) else "")
+        new_content = "".join(lines[:i]) + replacement + "".join(lines[i + count :])
+        p.write_text(new_content, encoding="utf-8")  # NOSONAR: path validado por _resolve()
+        return f"editado: {ruta} (indentación ajustada al archivo)\n" + _echo_region(
+            new_content, i + 1, i + len(new_lines)
+        )
+
+    # Nada casa: apuntar a las líneas del archivo que se parecen a la primera línea pedida
+    # (o, si ni eso, a su primer identificador: el modelo suele haber juntado varias líneas).
+    first = next((ln.strip() for ln in texto_viejo.splitlines() if ln.strip()), "")
+    similar = [k for k, ln in enumerate(lines) if first and first in ln][:3]
+    if not similar:
+        m = re.search(r"[A-Za-z_]\w{3,}", first)
+        token = m.group(0) if m else ""
+        similar = [k for k, ln in enumerate(lines) if token and token in ln][:3]
+    hint = ""
+    if similar:
+        hint = " Líneas parecidas: " + "; ".join(f"{k + 1}: {lines[k].rstrip()!r}" for k in similar)
+        hint += ". Copia el texto EXACTO que devuelve read_range (sin el prefijo 'NNNN: ')."
+    raise ToolError(f"Texto a reemplazar no encontrado en {ruta}.{hint}")

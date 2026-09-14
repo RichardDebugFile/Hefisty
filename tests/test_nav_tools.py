@@ -1,6 +1,15 @@
 import pytest
 
-from hefisty.agents.tools import ToolError, edit, glob, grep, har, outline, read_range
+from hefisty.agents.tools import (
+    ToolError,
+    edit,
+    glob,
+    grep,
+    har,
+    listar_directorio,
+    outline,
+    read_range,
+)
 
 
 def test_glob_top_and_recursive(tmp_path):
@@ -26,6 +35,47 @@ def test_read_range(tmp_path):
     (tmp_path / "a.txt").write_text("l1\nl2\nl3\nl4\n", encoding="utf-8")
     out = read_range(tmp_path, "a.txt", 2, 3)
     assert "2: l2" in out and "3: l3" in out and "l1" not in out
+    assert out.endswith("(archivo de 4 líneas)")
+
+
+def test_read_range_footer_lists_next_declarations(tmp_path):
+    # Eval §6 v3: leyó 1-160 del archivo correcto y paró; la función causante estaba en la 184.
+    src = "fun a() {}\n" + "x\n" * 5 + "fun b() {}\nfun c() {}\nval z = 1\nclass D\nfun e() {}\n"
+    (tmp_path / "F.kt").write_text(src, encoding="utf-8")
+    out = read_range(tmp_path, "F.kt", 1, 4)
+    assert out.endswith(
+        "(archivo de 11 líneas; declaraciones siguientes → "
+        "7: fun b() {} | 8: fun c() {} | 10: class D)"
+    )
+
+
+def test_tolerant_path_suffix_and_wildcards(tmp_path):
+    # Eval §6 v3: 3 rondas perdidas en "No existe la ruta" con rutas parciales
+    # (`app-mobile/src/.../pedidos` sin el módulo raíz) o con comodines (`**/pedidos`).
+    d = tmp_path / "app" / "src" / "main" / "pedidos"
+    d.mkdir(parents=True)
+    (d / "V.kt").write_text("fun buscar() {}\n", encoding="utf-8")
+    assert grep(tmp_path, "buscar", "src/main/pedidos") == [
+        "(ruta corregida: 'src/main/pedidos' → 'app/src/main/pedidos')",
+        "app/src/main/pedidos/V.kt:1: fun buscar() {}",
+    ]
+    assert grep(tmp_path, "buscar", "**/pedidos")[0].startswith("(ruta corregida")
+    assert grep(tmp_path, "nada", "pedidos") == [
+        "(ruta corregida: 'pedidos' → 'app/src/main/pedidos')",
+        "(sin resultados)",
+    ]
+    assert listar_directorio(tmp_path, "pedidos")[-1] == "V.kt"
+    assert read_range(tmp_path, "pedidos/V.kt", 1, 1).startswith("(ruta corregida")
+    assert outline(tmp_path, "V.kt")[-1] == "1: fun buscar() {}"
+
+
+def test_tolerant_path_ambiguous_lists_options(tmp_path):
+    for m in ("a", "b"):
+        (tmp_path / m / "detalle").mkdir(parents=True)
+    with pytest.raises(ToolError, match="Quisiste decir.*a/detalle.*b/detalle"):
+        grep(tmp_path, "x", "detalle")
+    with pytest.raises(ToolError, match="No existe la ruta: nope"):
+        grep(tmp_path, "x", "nope")
 
 
 def test_edit_unique_replacement(tmp_path):
@@ -33,6 +83,17 @@ def test_edit_unique_replacement(tmp_path):
     f.write_text("hola mundo", encoding="utf-8")
     edit(tmp_path, "a.txt", "mundo", "planeta")
     assert f.read_text(encoding="utf-8") == "hola planeta"
+
+
+def test_edit_echoes_resulting_lines(tmp_path):
+    # Eval §2 v4: un reemplazo de sub-línea dejó `val ` huérfano y el modelo no se enteró.
+    # El resultado del edit muestra las líneas resultantes numeradas (con 2 de contexto).
+    f = tmp_path / "A.kt"
+    f.write_text("fun f() {\n    if (x) {\n        val r = a.removeAt(i)\n        y()\n    }\n}\n")
+    out = edit(tmp_path, "A.kt", "r = a.removeAt(i)", "a.removeAt(i)")
+    assert out.startswith("editado: A.kt\n")
+    assert "3:         val a.removeAt(i)" in out  # el modelo ve el resto huérfano
+    assert "1: fun f() {" in out and "5:     }" in out  # ±2 de contexto
 
 
 def test_edit_non_unique_fails(tmp_path):
@@ -45,6 +106,64 @@ def test_edit_missing_text_fails(tmp_path):
     (tmp_path / "a.txt").write_text("hola", encoding="utf-8")
     with pytest.raises(ToolError):
         edit(tmp_path, "a.txt", "chau", "hey")
+
+
+_KT = (
+    "fun f() {\n"
+    "    if (ok) {\n"
+    "        entriesPair = Pair(\n"
+    "            buildFromService(\n"
+    "                item = firstEntry\n"
+    "            ),\n"
+    "            ArrayList(x)\n"
+    "        )\n"
+    "    }\n"
+    "}\n"
+)
+
+
+def test_edit_tolerates_wrong_indentation(tmp_path):
+    # Caso real (eval §2 v3, 13/09/2026): el modelo reconstruye el sangrado a ojo desde
+    # read_range y falló 7 veces seguidas en el mismo bloque. Si el bloque casa línea a línea
+    # ignorando indentación y es único, se aplica reubicando el texto nuevo al sangrado real.
+    f = tmp_path / "A.kt"
+    f.write_text(_KT, encoding="utf-8")
+    out = edit(
+        tmp_path,
+        "A.kt",
+        # 24/20 espacios en vez de 12/16/12 (lo que mandó el modelo).
+        "                        buildFromService(\n"
+        "                    item = firstEntry\n"
+        "                        ),",
+        "                        buildFromAudit(\n"
+        "                            audit = audit\n"
+        "                        ),",
+    )
+    assert "indentación ajustada" in out
+    assert "4:             buildFromAudit(" in out  # eco de lo que quedó, con sangrado real
+    assert f.read_text(encoding="utf-8") == _KT.replace(
+        "            buildFromService(\n                item = firstEntry\n            ),",
+        "            buildFromAudit(\n                audit = audit\n            ),",
+    )
+
+
+def test_edit_lenient_requires_unique_block(tmp_path):
+    f = tmp_path / "A.kt"
+    f.write_text("  a()\n    b()\n  a()\n    b()\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="no único"):
+        edit(tmp_path, "A.kt", "a()\nb()", "c()")
+    assert f.read_text(encoding="utf-8") == "  a()\n    b()\n  a()\n    b()\n"  # intacto
+
+
+def test_edit_not_found_points_to_similar_lines(tmp_path):
+    # El modelo junta 3 líneas en una: ni exacto ni por líneas casa → el error señala la línea
+    # real que contiene el identificador para que copie el texto exacto.
+    (tmp_path / "A.kt").write_text(_KT, encoding="utf-8")
+    with pytest.raises(ToolError) as exc:
+        edit(tmp_path, "A.kt", "buildFromService(item = firstEntry)", "x")
+    msg = str(exc.value)
+    assert "4: '            buildFromService('" in msg
+    assert "read_range" in msg
 
 
 def test_grep_skips_noise_dirs_and_binaries(tmp_path):
@@ -76,6 +195,32 @@ def test_grep_explicit_file_respected_regardless_of_extension(tmp_path):
     (tmp_path / "notes.log").write_text("boom\n", encoding="utf-8")
     res = grep(tmp_path, "boom", "notes.log")
     assert res == ["notes.log:1: boom"]
+
+
+def test_grep_summarizes_by_file_when_too_many_hits(tmp_path):
+    # Eval §6 (13/09/2026): `queryText` con contexto=5 tenía 38 hits en 18 archivos; el corte
+    # por líneas de salida mostraba solo los de la primera carpeta alfabética (`cuentas/`) y los
+    # del módulo objetivo (`pedidos/`) quedaban fuera sin aviso. Con muchos hits, grep
+    # devuelve un resumen por archivo ORDENADO POR Nº DE HITS con sus líneas.
+    a = tmp_path / "cuentas"
+    b = tmp_path / "pedidos" / "detalle"
+    a.mkdir()
+    b.mkdir(parents=True)
+    for i in range(6):  # 6 archivos × 4 hits = 24 en cuentas/ (primero alfabéticamente)
+        (a / f"A{i}.kt").write_text("queryText\n" * 4, encoding="utf-8")
+    (b / "Utils.kt").write_text("x\n" + "queryText\n" * 9, encoding="utf-8")  # 9 hits, l. 2-10
+    res = grep(tmp_path, "queryText", contexto=5)  # 33 hits > tope de detalle (30)
+    assert res[0].startswith("33 coincidencias en 7 archivos")
+    assert res[1] == "  pedidos/detalle/Utils.kt: 2, 3, 4, 5, 6, 7, 8, 9, … (+1) [9]"
+    assert all(ln.startswith("  cuentas/A") for ln in res[2:8])
+    assert "ruta=" in res[-1]
+
+
+def test_grep_detail_when_few_hits(tmp_path):
+    (tmp_path / "a.kt").write_text("foo\nbar\nfoo\n", encoding="utf-8")
+    assert grep(tmp_path, "foo") == ["a.kt:1: foo", "a.kt:3: foo"]
+    ctx = grep(tmp_path, "bar", contexto=1)
+    assert ctx == ["a.kt:2:", "   1: foo", "  >2: bar", "   3: foo"]
 
 
 def test_grep_reads_big_logs(tmp_path):

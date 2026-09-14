@@ -23,6 +23,7 @@ class Hit:
     section: str
     language: str
     score: float
+    collection: str = ""
 
 
 class KnowledgeStore:
@@ -61,6 +62,7 @@ class KnowledgeStore:
                 section=p.payload.get("section", ""),
                 language=p.payload.get("language", ""),
                 score=p.score,
+                collection=collection,
             )
             for p in res
         ]
